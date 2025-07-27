@@ -327,54 +327,69 @@ end
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 
-    local lastEP = knownEP or (RaidTrackDB.syncStates[name] or 0)
-    local epgpDelta, maxEP = RaidTrack.GetEPGPChangesSince(lastEP), lastEP
-    for _, e in ipairs(epgpDelta) do
-        if e.id and e.id > maxEP then maxEP = e.id end
-    end
+    local payload
+    local sendFull = (knownEP == 0 and knownLoot == 0)
 
-    local lastL = knownLoot or (RaidTrackDB.lootSyncStates[name] or 0)
-    local lootDelta, maxLoot = {}, lastL
-    for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-        if e.id and e.id > lastL then
-            table.insert(lootDelta, e)
-            if e.id > maxLoot then maxLoot = e.id end
+    if sendFull then
+        payload = {
+            full = {
+                epgp = RaidTrackDB.epgp,
+                loot = RaidTrackDB.lootHistory,
+                epgpLog = RaidTrackDB.epgpLog.changes,
+                settings = RaidTrackDB.settings or {}
+            }
+        }
+        RaidTrack.AddDebugMessage("Sending FULL database to " .. name)
+    else
+        local epgpDelta, maxEP = RaidTrack.GetEPGPChangesSince(knownEP), knownEP
+        for _, e in ipairs(epgpDelta) do
+            if e.id and e.id > maxEP then maxEP = e.id end
         end
+
+        local lootDelta, maxLoot = {}, knownLoot
+        for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
+            if e.id and e.id > knownLoot then
+                table.insert(lootDelta, e)
+                if e.id > maxLoot then maxLoot = e.id end
+            end
+        end
+
+        if #epgpDelta == 0 and #lootDelta == 0 then
+            RaidTrack.AddDebugMessage("No new delta for " .. name .. ", skipping send")
+            return
+        end
+
+        payload = {
+            epgpDelta = epgpDelta,
+            lootDelta = lootDelta
+        }
+
+        -- Zapisz tylko jeśli wysyłamy deltę
+        RaidTrack.pendingSends[name] = {
+            chunks = {},
+            meta = {
+                lastEP = maxEP,
+                lastLoot = maxLoot
+            }
+        }
     end
 
-    -- 📌 NOWY warunek: jeżeli nie ma żadnych zmian – nic nie wysyłaj
-    if #epgpDelta == 0 and #lootDelta == 0 then
-        RaidTrack.AddDebugMessage("No new delta for " .. name .. ", skipping send")
-        return
-    end
-
-    -- Serializuj payload
-    local payload = { epgpDelta = epgpDelta, lootDelta = lootDelta }
+    -- Serializacja
     local str = RaidTrack.SafeSerialize(payload)
-
-    -- Podziel na chunk’i
     local total = math.ceil(#str / CHUNK_SIZE)
     local chunks = {}
     for i = 1, total do
         chunks[i] = str:sub((i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
     end
 
-    -- Zapisz do pendingSends
-    RaidTrack.pendingSends[name] = {
-        chunks = chunks,
-        meta = {
-            lastEP = maxEP,
-            lastLoot = maxLoot
-        }
-    }
-    -- Od razu oznacz, że ten gracz ma widzieć do tych ID (zabezpiecza przed duplikacją)
-RaidTrackDB.syncStates[name]     = maxEP
-RaidTrackDB.lootSyncStates[name] = maxLoot
+    -- Zapis chunków (dla pełnej bazy też)
+    RaidTrack.pendingSends[name] = RaidTrack.pendingSends[name] or {}
+    RaidTrack.pendingSends[name].chunks = chunks
 
-
-    RaidTrack.AddDebugMessage("PING -> " .. name .. " (sending " .. #epgpDelta .. " EPGP + " .. #lootDelta .. " loot)")
+    RaidTrack.AddDebugMessage("PING -> " .. name .. " (" .. total .. " chunks)")
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PING", "WHISPER", name)
 end
+
 
 
 function RaidTrack.BroadcastSettings()
@@ -484,27 +499,58 @@ mf:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
     end
 
     if buf.received == buf.total then
-        local full = table.concat(buf.chunks)
-        RaidTrack.chunkBuffer[who] = nil
-        local ok, data = RaidTrack.SafeDeserialize(full)
-        if ok and data then
-            RaidTrack.MergeEPGPChanges(data.epgpDelta)
-            local seen = {}
-            for _, e in ipairs(RaidTrackDB.lootHistory) do seen[e.id] = true end
-            local mx = RaidTrackDB.lootSyncStates[who] or 0
-            for _, e in ipairs(data.lootDelta or {}) do
-                if e.id and not seen[e.id] then
-                    table.insert(RaidTrackDB.lootHistory, e)
-                    seen[e.id] = true
-                    if e.id > mx then mx = e.id end
-                end
-            end
-            RaidTrackDB.lootSyncStates[who] = mx
-            if RaidTrack.RefreshLootTab then
-                RaidTrack.RefreshLootTab()
+    local full = table.concat(buf.chunks)
+    RaidTrack.chunkBuffer[who] = nil
+    local ok, data = RaidTrack.SafeDeserialize(full)
+    if ok and data then
+        -- 🔁 FULL SYNC (new player)
+        if data.full then
+            RaidTrackDB.epgp = data.full.epgp or {}
+            RaidTrackDB.lootHistory = data.full.loot or {}
+                if data.full.settings then
+        for k, v in pairs(data.full.settings) do
+            RaidTrackDB.settings[k] = v
+        end
+        RaidTrack.AddDebugMessage("Received sync settings from full sync")
+    end
+
+            RaidTrackDB.epgpLog = {
+                changes = data.full.epgpLog or {},
+                lastId = (data.full.epgpLog[#data.full.epgpLog] and data.full.epgpLog[#data.full.epgpLog].id) or 0
+            }
+            RaidTrackDB.syncStates[who] = RaidTrackDB.epgpLog.lastId
+
+            RaidTrack.AddDebugMessage("Full database received from " .. who)
+
+            if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
+            if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
+
+            -- 🔁 Retry delta sync after full load
+            C_Timer.After(2, function()
+                RaidTrack.RequestSyncFromGuild()
+            end)
+            return
+        end
+
+        -- 🔁 Normal delta merge
+        RaidTrack.MergeEPGPChanges(data.epgpDelta)
+        local seen = {}
+        for _, e in ipairs(RaidTrackDB.lootHistory) do seen[e.id] = true end
+        local mx = RaidTrackDB.lootSyncStates[who] or 0
+        for _, e in ipairs(data.lootDelta or {}) do
+            if e.id and not seen[e.id] then
+                table.insert(RaidTrackDB.lootHistory, e)
+                seen[e.id] = true
+                if e.id > mx then mx = e.id end
             end
         end
+        RaidTrackDB.lootSyncStates[who] = mx
+        if RaidTrack.RefreshLootTab then
+            RaidTrack.RefreshLootTab()
+        end
     end
+end
+
 end)  -- tutaj jest to jedyne zamknięcie funkcji i SetScript
 
 
