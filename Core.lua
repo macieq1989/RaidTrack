@@ -57,6 +57,25 @@ function RaidTrack.AddDebugMessage(msg)
     end
 end
 
+-- Check if player is officer (Retail)
+function RaidTrack.IsOfficer()
+    if not IsInGuild() then return false end
+    local myName = UnitName("player")
+    local myRank = nil
+    for i = 1, GetNumGuildMembers() do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name and Ambiguate(name, "none") == myName then
+            myRank = rankIndex
+            break
+        end
+    end
+    if myRank == nil then return false end
+
+    local configuredMinRank = RaidTrackDB.settings.minSyncRank or 0
+    return myRank <= configuredMinRank  -- im mniejszy index, tym wyższa ranga
+end
+
+
 -- Log EPGP changes
 function RaidTrack.LogEPGPChange(player, deltaEP, deltaGP, by)
     if not player or (not deltaEP and not deltaGP) then return end
@@ -72,6 +91,13 @@ function RaidTrack.LogEPGPChange(player, deltaEP, deltaGP, by)
     table.insert(RaidTrackDB.epgpLog.changes, entry)
     RaidTrack.ApplyEPGPChange(entry)
     RaidTrack.AddDebugMessage("Logged change: EP=" .. entry.deltaEP .. ", GP=" .. entry.deltaGP .. " to " .. player)
+    -- Auto-sync after change
+if RaidTrackDB.settings.autoSync ~= false then
+    RaidTrack.ScheduleSync()
+end
+
+
+
 end
 
 -- Apply EPGP change locally
@@ -201,6 +227,7 @@ end
 
 
 -- Auto‑pull on login (no push)
+-- Auto‑pull on login (no push)
 local lg = CreateFrame("Frame")
 lg:RegisterEvent("PLAYER_LOGIN")
 lg:SetScript("OnEvent", function(_,evt)
@@ -210,12 +237,91 @@ lg:SetScript("OnEvent", function(_,evt)
             RaidTrack.RequestSyncFromGuild()
         end)
     end
+
+    -- BONUS: tylko officerzy broadcastują ustawienia 10s po zalogowaniu
+    if RaidTrack.IsOfficer() then
+        C_Timer.After(10, function()
+            RaidTrack.BroadcastSettings()
+        end)
+    end
 end)
 
 -- Networking setup
 C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
 RaidTrack.pendingSends = {}
 RaidTrack.chunkBuffer = {}
+
+RaidTrack.syncTimer = nil
+
+function RaidTrack.ScheduleSync()
+    RaidTrack.AddDebugMessage("ScheduleSync() called")
+    if RaidTrack.syncTimer then
+        RaidTrack.syncTimer:Cancel()
+    end
+    RaidTrack.syncTimer = C_Timer.NewTimer(0.5, function()
+        RaidTrack.syncTimer = nil
+        RaidTrack.SendSyncDeltaToEligible()
+    end)
+end
+
+
+function RaidTrack.SendSyncDeltaToEligible()
+    RaidTrack.AddDebugMessage("Running SendSyncDeltaToEligible()")
+
+    if not IsInGuild() then return end
+    local me = UnitName("player")
+    local myRank = nil
+    for i = 1, GetNumGuildMembers() do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name and Ambiguate(name, "none") == me then
+            myRank = rankIndex
+            break
+        end
+    end
+    if not myRank then
+        RaidTrack.AddDebugMessage("Cannot determine own rank.")
+        return
+    end
+
+    local minRank = RaidTrackDB.settings.minSyncRank or 0
+    RaidTrack.AddDebugMessage("My rank=" .. tostring(myRank) .. ", minSyncRank=" .. tostring(minRank))
+    if myRank > minRank then
+        RaidTrack.AddDebugMessage("Not permitted to sync (rank too low).")
+        return
+    end
+
+    local sent = {}
+    for i = 1, GetNumGuildMembers() do
+        local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
+        name = name and Ambiguate(name, "none")
+
+        if online and name ~= me and rankIndex <= minRank and not sent[name] then
+            sent[name] = true
+
+            -- Użyj obecnego syncState jako "knownEP" i "knownLoot"
+            local knownEP = RaidTrackDB.syncStates[name] or 0
+            local knownLoot = RaidTrackDB.lootSyncStates[name] or 0
+
+            -- Wstępna analiza: czy będzie coś nowego do wysłania?
+            local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP)
+            local lootDelta = {}
+            for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
+                if e.id and e.id > knownLoot then
+                    table.insert(lootDelta, e)
+                end
+            end
+
+            if #epgpDelta == 0 and #lootDelta == 0 then
+                RaidTrack.AddDebugMessage("No new delta for " .. name .. ", skipping send")
+            else
+                RaidTrack.AddDebugMessage("Sending delta to " .. name)
+                RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
+            end
+        end
+    end
+end
+
+
 
 -- Push only in response to REQ_SYNC
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
@@ -236,29 +342,56 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         end
     end
 
-    local payload = { epgpDelta = epgpDelta, lootDelta = lootDelta }
-    local str = RaidTrack.SafeSerialize(payload)
-
-    if RaidTrackDB.lastPayloads[name] == str then
+    -- 📌 NOWY warunek: jeżeli nie ma żadnych zmian – nic nie wysyłaj
+    if #epgpDelta == 0 and #lootDelta == 0 then
         RaidTrack.AddDebugMessage("No new delta for " .. name .. ", skipping send")
         return
     end
-    RaidTrackDB.lastPayloads[name] = str
 
+    -- Serializuj payload
+    local payload = { epgpDelta = epgpDelta, lootDelta = lootDelta }
+    local str = RaidTrack.SafeSerialize(payload)
+
+    -- Podziel na chunk’i
     local total = math.ceil(#str / CHUNK_SIZE)
     local chunks = {}
     for i = 1, total do
         chunks[i] = str:sub((i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
     end
 
+    -- Zapisz do pendingSends
     RaidTrack.pendingSends[name] = {
         chunks = chunks,
-        meta = { lastEP = maxEP, lastLoot = maxLoot }
+        meta = {
+            lastEP = maxEP,
+            lastLoot = maxLoot
+        }
     }
+    -- Od razu oznacz, że ten gracz ma widzieć do tych ID (zabezpiecza przed duplikacją)
+RaidTrackDB.syncStates[name]     = maxEP
+RaidTrackDB.lootSyncStates[name] = maxLoot
 
-    RaidTrack.AddDebugMessage("PING -> " .. name)
+
+    RaidTrack.AddDebugMessage("PING -> " .. name .. " (sending " .. #epgpDelta .. " EPGP + " .. #lootDelta .. " loot)")
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PING", "WHISPER", name)
 end
+
+
+function RaidTrack.BroadcastSettings()
+    if not RaidTrack.IsOfficer() then return end
+    local s = RaidTrackDB.settings
+    local payload = {
+        settings = {
+            minSyncRank = s.minSyncRank,
+            officerOnly = s.officerOnly,
+            autoSync = s.autoSync
+        }
+    }
+    local msg = RaidTrack.SafeSerialize(payload)
+    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG|" .. msg, "GUILD")
+    RaidTrack.AddDebugMessage("Broadcasted settings to guild.")
+end
+
 
 
 -- Chunk sender
@@ -283,17 +416,16 @@ function RaidTrack.SendChunkBatch(name)
     end
 
     if not any then
-        if p.timer then p.timer:Cancel() end
-        RaidTrack.pendingSends[name] = nil
+    if p.timer then p.timer:Cancel() end
+    RaidTrack.pendingSends[name] = nil
 
-        RaidTrackDB.syncStates[name]     = p.meta.lastEP
-        RaidTrackDB.lootSyncStates[name] = p.meta.lastLoot
-        RaidTrack.AddDebugMessage("Sync completed for "..name)
-    elseif not p.timer then
-        p.timer = C_Timer.NewTimer(SEND_DELAY, function()
-            RaidTrack.SendChunkBatch(name)
-        end)
-    end
+    -- ✅ ZAPISZ że dana osoba ma już do tych ID
+    RaidTrackDB.syncStates[name]     = p.meta.lastEP
+    RaidTrackDB.lootSyncStates[name] = p.meta.lastLoot
+
+    RaidTrack.AddDebugMessage("Sync completed for " .. name)
+end
+
 end
 
 -- Incoming handler
@@ -326,6 +458,17 @@ mf:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
             p.chunks[idx] = nil
         end
         return
+        elseif msg:sub(1,4) == "CFG|" then
+    local cfgStr = msg:sub(5)
+    local ok, data = RaidTrack.SafeDeserialize(cfgStr)
+    if ok and data and data.settings then
+        for k, v in pairs(data.settings) do
+            RaidTrackDB.settings[k] = v
+        end
+        RaidTrack.AddDebugMessage("Received sync settings from " .. who)
+    end
+    return
+
     end
 
     -- Data chunk

@@ -67,11 +67,17 @@ local function UpdateRankDropdown()
                 local info = UIDropDownMenu_CreateInfo()
                 info.text  = rankName
                 info.value = ridx
-                info.func  = function(self)
-                    UIDropDownMenu_SetSelectedValue(rankDD, ridx)
-                    UIDropDownMenu_SetText(rankDD, rankName)
-                    RaidTrackDB.settings.minSyncRank = ridx
-                end
+                info.func = function(self)
+    if not RaidTrack.IsOfficer() then
+        RaidTrack.AddDebugMessage("Only officers can change sync rank.")
+        return
+    end
+    UIDropDownMenu_SetSelectedValue(rankDD, ridx)
+    UIDropDownMenu_SetText(rankDD, rankName)
+    RaidTrackDB.settings.minSyncRank = ridx
+    RaidTrack.BroadcastSettings() -- nowa funkcja
+end
+
                 UIDropDownMenu_AddButton(info, level)
             end
         end
