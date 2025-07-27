@@ -182,15 +182,23 @@ end)
 function RaidTrack.RequestSyncFromGuild()
     if not IsInGuild() then return end
     local me = UnitName("player")
-    for i=1,GetNumGuildMembers() do
-        local nm,_,_,_,_,_,_,_,online = GetGuildRosterInfo(i)
+    local epID = RaidTrackDB.epgpLog and RaidTrackDB.epgpLog.lastId or 0
+    local lootID = 0
+    for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
+        if e.id and e.id > lootID then lootID = e.id end
+    end
+
+    for i = 1, GetNumGuildMembers() do
+        local nm, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
         local who = nm and Ambiguate(nm, "none")
-        if who~=me and online then
-            C_ChatInfo.SendAddonMessage(SYNC_PREFIX,"REQ_SYNC","WHISPER",who)
-            RaidTrack.AddDebugMessage("REQ_SYNC -> "..who)
+        if who ~= me and online then
+            local msg = string.format("REQ_SYNC|%d|%d", epID, lootID)
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, msg, "WHISPER", who)
+            RaidTrack.AddDebugMessage("REQ_SYNC -> " .. who .. " (epID=" .. epID .. ", lootID=" .. lootID .. ")")
         end
     end
 end
+
 
 -- Auto‑pull on login (no push)
 local lg = CreateFrame("Frame")
@@ -210,49 +218,48 @@ RaidTrack.pendingSends = {}
 RaidTrack.chunkBuffer = {}
 
 -- Push only in response to REQ_SYNC
-function RaidTrack.SendSyncDataTo(name)
+function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 
-    -- prepare EPGP delta + maxEP
-    local lastEP = RaidTrackDB.syncStates[name] or 0
+    local lastEP = knownEP or (RaidTrackDB.syncStates[name] or 0)
     local epgpDelta, maxEP = RaidTrack.GetEPGPChangesSince(lastEP), lastEP
-    for _,e in ipairs(epgpDelta) do if e.id and e.id>maxEP then maxEP=e.id end end
+    for _, e in ipairs(epgpDelta) do
+        if e.id and e.id > maxEP then maxEP = e.id end
+    end
 
-    -- prepare loot delta + maxLoot
-    local lastL = RaidTrackDB.lootSyncStates[name] or 0
+    local lastL = knownLoot or (RaidTrackDB.lootSyncStates[name] or 0)
     local lootDelta, maxLoot = {}, lastL
-    for _,e in ipairs(RaidTrackDB.lootHistory or {}) do
-        if e.id and e.id>lastL then
+    for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
+        if e.id and e.id > lastL then
             table.insert(lootDelta, e)
-            if e.id>maxLoot then maxLoot=e.id end
+            if e.id > maxLoot then maxLoot = e.id end
         end
     end
 
-    -- serialize payload
-    local payload = { epgpDelta=epgpDelta, lootDelta=lootDelta }
-    local str     = RaidTrack.SafeSerialize(payload)
+    local payload = { epgpDelta = epgpDelta, lootDelta = lootDelta }
+    local str = RaidTrack.SafeSerialize(payload)
 
-    -- skip if identical to last time
     if RaidTrackDB.lastPayloads[name] == str then
-        RaidTrack.AddDebugMessage("No new delta for "..name..", skipping send")
+        RaidTrack.AddDebugMessage("No new delta for " .. name .. ", skipping send")
         return
     end
     RaidTrackDB.lastPayloads[name] = str
 
-    -- divide into chunks
-    local total  = math.ceil(#str/CHUNK_SIZE)
+    local total = math.ceil(#str / CHUNK_SIZE)
     local chunks = {}
-    for i=1,total do chunks[i] = str:sub((i-1)*CHUNK_SIZE+1, i*CHUNK_SIZE) end
+    for i = 1, total do
+        chunks[i] = str:sub((i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
+    end
 
-    -- store chunks + meta
     RaidTrack.pendingSends[name] = {
         chunks = chunks,
-        meta   = { lastEP = maxEP, lastLoot = maxLoot }
+        meta = { lastEP = maxEP, lastLoot = maxLoot }
     }
 
-    RaidTrack.AddDebugMessage("PING -> "..name)
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX,"PING","WHISPER",name)
+    RaidTrack.AddDebugMessage("PING -> " .. name)
+    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PING", "WHISPER", name)
 end
+
 
 -- Chunk sender
 function RaidTrack.SendChunkBatch(name)
@@ -303,9 +310,13 @@ mf:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
         RaidTrack.AddDebugMessage("Received PONG from " .. who)
         RaidTrack.SendChunkBatch(who)
         return
-    elseif msg == "REQ_SYNC" then
-        RaidTrack.AddDebugMessage("Got REQ_SYNC from " .. who .. "; pushing my delta")
-        RaidTrack.SendSyncDataTo(who)
+ elseif msg:sub(1,9) == "REQ_SYNC|" then
+    local _, epStr, lootStr = strsplit("|", msg)
+    local knownEP = tonumber(epStr) or 0
+    local knownLoot = tonumber(lootStr) or 0
+    RaidTrack.AddDebugMessage("Got REQ_SYNC from " .. who .. " (knownEP=" .. knownEP .. ", knownLoot=" .. knownLoot .. ")")
+    RaidTrack.SendSyncDataTo(who, knownEP, knownLoot)
+
         return
     elseif msg:sub(1,4) == "ACK|" then
         local idx = tonumber(msg:sub(5))
