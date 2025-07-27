@@ -1,0 +1,19 @@
+## Interface: 110105
+## Title: RaidTrack
+## Notes: Raid, Loot and EPGP Tracker
+## Version: 1.0
+## SavedVariables: RaidTrackDB
+
+# Libraries
+Libs/LibStub/LibStub.lua
+Libs/AceSerializer-3.0.lua
+
+# Core file
+Core.lua
+
+# Tabs
+RaidTab.lua
+EPGPTab.lua
+LootTab.lua
+SettingsTab.lua
+GuildTab.lua 
