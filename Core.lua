@@ -47,6 +47,25 @@ initFrame:SetScript("OnEvent", function(self, event, name)
     initFrame:UnregisterEvent("ADDON_LOADED")
 end)
 
+initFrame:SetScript("OnEvent", function(self, event, name)
+    if name ~= addonName then return end
+
+    RaidTrackDB.syncStates      = RaidTrackDB.syncStates      or {}
+    RaidTrackDB.lootSyncStates  = RaidTrackDB.lootSyncStates  or {}
+    RaidTrackDB.lastPayloads    = RaidTrackDB.lastPayloads    or {}
+    RaidTrackDB.settings        = RaidTrackDB.settings        or {}
+    
+    -- ✅ Dodaj domyślny poziom rangi do synchronizacji (0 = GM, 1 = officerzy itd.)
+    if RaidTrackDB.settings.minSyncRank == nil then
+        RaidTrackDB.settings.minSyncRank = 1
+        RaidTrack.AddDebugMessage("Default minSyncRank set to 1")
+    end
+
+    initFrame:UnregisterEvent("ADDON_LOADED")
+end)
+
+
+
 -- Debug helper
 function RaidTrack.AddDebugMessage(msg)
     print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
@@ -327,10 +346,22 @@ end
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 
-    local payload
     local sendFull = (knownEP == 0 and knownLoot == 0)
+    local payload, maxEP, maxLoot
 
     if sendFull then
+        maxEP, maxLoot = 0, 0
+        for _, e in ipairs(RaidTrackDB.epgpLog.changes or {}) do
+            if e.id and e.id > maxEP then maxEP = e.id end
+        end
+        for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
+            if e.id and e.id > maxLoot then maxLoot = e.id end
+        end
+        if sendFull and maxEP == 0 and maxLoot == 0 then
+    RaidTrack.AddDebugMessage("Skipping full sync to " .. name .. " (both EP/GP and loot are empty)")
+    return
+end
+
         payload = {
             full = {
                 epgp = RaidTrackDB.epgp,
@@ -339,24 +370,23 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
                 settings = RaidTrackDB.settings or {}
             }
         }
+
+        RaidTrack.pendingSends[name] = {
+            meta = { lastEP = maxEP, lastLoot = maxLoot }
+        }
+-- ✅ Zapisz też stan jako własny (żeby nie wysyłać ponownie tego samego)
+RaidTrackDB.syncStates[UnitName("player")] = maxEP
+RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
+RaidTrack.AddDebugMessage("Preemptively set own sync state: EP=" .. maxEP .. ", Loot=" .. maxLoot)
+
         RaidTrack.AddDebugMessage("Sending FULL database to " .. name)
     else
-        local epgpDelta, maxEP = RaidTrack.GetEPGPChangesSince(knownEP), knownEP
-        for _, e in ipairs(epgpDelta) do
-            if e.id and e.id > maxEP then maxEP = e.id end
-        end
-
-        local lootDelta, maxLoot = {}, knownLoot
+        local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP)
+        local lootDelta = {}
         for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
             if e.id and e.id > knownLoot then
                 table.insert(lootDelta, e)
-                if e.id > maxLoot then maxLoot = e.id end
             end
-        end
-
-        if #epgpDelta == 0 and #lootDelta == 0 then
-            RaidTrack.AddDebugMessage("No new delta for " .. name .. ", skipping send")
-            return
         end
 
         payload = {
@@ -364,14 +394,25 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
             lootDelta = lootDelta
         }
 
-        -- Zapisz tylko jeśli wysyłamy deltę
-        RaidTrack.pendingSends[name] = {
-            chunks = {},
-            meta = {
-                lastEP = maxEP,
-                lastLoot = maxLoot
-            }
-        }
+        RaidTrack.AddDebugMessage("Sending DELTA to " .. name .. " (" .. #epgpDelta .. " EP/GP, " .. #lootDelta .. " loot)")
+        -- Preemptively mark that we’ve sent up to this point
+local maxEP = knownEP
+for _, e in ipairs(epgpDelta) do
+    if e.id and e.id > maxEP then maxEP = e.id end
+end
+RaidTrackDB.syncStates[name] = maxEP
+RaidTrackDB.syncStates[UnitName("player")] = maxEP
+RaidTrack.AddDebugMessage("Preemptively set own sync state: EP=" .. maxEP .. ", Loot=" .. (RaidTrackDB.lootSyncStates[UnitName("player")] or 0))
+
+-- Preemptively mark that we've sent loot up to this point
+local maxLoot = knownLoot
+for _, e in ipairs(lootDelta) do
+    if e.id and e.id > maxLoot then maxLoot = e.id end
+end
+RaidTrackDB.lootSyncStates[name] = maxLoot
+RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
+RaidTrack.AddDebugMessage("Preemptively set own loot sync state: Loot=" .. maxLoot .. ", EP=" .. (RaidTrackDB.syncStates[UnitName("player")] or 0))
+
     end
 
     -- Serializacja
@@ -382,13 +423,23 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         chunks[i] = str:sub((i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
     end
 
-    -- Zapis chunków (dla pełnej bazy też)
     RaidTrack.pendingSends[name] = RaidTrack.pendingSends[name] or {}
     RaidTrack.pendingSends[name].chunks = chunks
 
     RaidTrack.AddDebugMessage("PING -> " .. name .. " (" .. total .. " chunks)")
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PING", "WHISPER", name)
+
+    if sendFull then
+        C_Timer.NewTimer(15, function()
+            local p = RaidTrack.pendingSends[name]
+            if p and not p.gotPong then
+                RaidTrack.AddDebugMessage("No PONG from " .. name .. " after 15s, canceling full sync.")
+                RaidTrack.pendingSends[name] = nil
+            end
+        end)
+    end
 end
+
 
 
 
@@ -412,10 +463,10 @@ end
 -- Chunk sender
 function RaidTrack.SendChunkBatch(name)
     local p = RaidTrack.pendingSends[name]
-    if not p then return end
+    if not p or not p.chunks then return end
 
     local any = false
-    for idx,c in ipairs(p.chunks) do
+    for idx, c in ipairs(p.chunks) do
         if c then
             any = true
             C_ChatInfo.SendAddonMessage(
@@ -431,17 +482,27 @@ function RaidTrack.SendChunkBatch(name)
     end
 
     if not any then
-    if p.timer then p.timer:Cancel() end
-    RaidTrack.pendingSends[name] = nil
+        if p.timer then p.timer:Cancel() end
+        RaidTrack.pendingSends[name] = nil
 
-    -- ✅ ZAPISZ że dana osoba ma już do tych ID
-    RaidTrackDB.syncStates[name]     = p.meta.lastEP
-    RaidTrackDB.lootSyncStates[name] = p.meta.lastLoot
+        -- ✅ Zapisz, że odbiorca ma już te dane
+        if p.meta and p.meta.lastEP and p.meta.lastLoot then
+     
 
-    RaidTrack.AddDebugMessage("Sync completed for " .. name)
+               -- ✅ DODANE: Zapisz również swój własny stan, żeby nie wysyłać tego ponownie
+    RaidTrackDB.syncStates[UnitName("player")]     = p.meta.lastEP
+    RaidTrackDB.lootSyncStates[UnitName("player")] = p.meta.lastLoot
+    RaidTrack.AddDebugMessage("Updated own sync state after full send to " .. name)
+
+
+            RaidTrack.AddDebugMessage("Updated own sync state after full send to " .. name)
+        end
+
+        RaidTrack.lastSyncTime = time()
+        RaidTrack.AddDebugMessage("Sync completed for " .. name)
+    end
 end
 
-end
 
 -- Incoming handler
 local mf = CreateFrame("Frame")
@@ -454,8 +515,10 @@ mf:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PONG", "WHISPER", who)
         return
     elseif msg == "PONG" and RaidTrack.pendingSends[who] then
-        RaidTrack.AddDebugMessage("Received PONG from " .. who)
-        RaidTrack.SendChunkBatch(who)
+    RaidTrack.AddDebugMessage("Received PONG from " .. who)
+    RaidTrack.pendingSends[who].gotPong = true
+    RaidTrack.SendChunkBatch(who)
+
         return
  elseif msg:sub(1,9) == "REQ_SYNC|" then
     local _, epStr, lootStr = strsplit("|", msg)
@@ -505,49 +568,91 @@ mf:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
     if ok and data then
         -- 🔁 FULL SYNC (new player)
         if data.full then
-            RaidTrackDB.epgp = data.full.epgp or {}
-            RaidTrackDB.lootHistory = data.full.loot or {}
-                if data.full.settings then
+    RaidTrackDB.epgp = data.full.epgp or {}
+    RaidTrackDB.lootHistory = data.full.loot or {}
+
+    -- Compute maxLoot based on received lootHistory
+    local maxLoot = 0
+    for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
+        if e.id and e.id > maxLoot then maxLoot = e.id end
+    end
+
+    if data.full.settings then
         for k, v in pairs(data.full.settings) do
             RaidTrackDB.settings[k] = v
         end
         RaidTrack.AddDebugMessage("Received sync settings from full sync")
     end
 
-            RaidTrackDB.epgpLog = {
-                changes = data.full.epgpLog or {},
-                lastId = (data.full.epgpLog[#data.full.epgpLog] and data.full.epgpLog[#data.full.epgpLog].id) or 0
-            }
-            RaidTrackDB.syncStates[who] = RaidTrackDB.epgpLog.lastId
+    RaidTrackDB.epgpLog = {
+        changes = data.full.epgpLog or {},
+        lastId = (data.full.epgpLog[#data.full.epgpLog] and data.full.epgpLog[#data.full.epgpLog].id) or 0
+    }
 
-            RaidTrack.AddDebugMessage("Full database received from " .. who)
+    -- Ustaw stan synchronizacji EPGP
+local lastEP = RaidTrackDB.epgpLog.lastId or 0
+RaidTrackDB.syncStates[who] = lastEP
+RaidTrackDB.syncStates[UnitName("player")] = lastEP
+RaidTrack.AddDebugMessage("Set syncStates[" .. UnitName("player") .. "] = " .. lastEP)
+RaidTrack.AddDebugMessage("Set syncStates[" .. who .. "] = " .. lastEP)
 
-            if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
-            if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
+    RaidTrackDB.lootSyncStates[who] = maxLoot
+RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
+RaidTrack.AddDebugMessage("Set lootSyncStates[" .. UnitName("player") .. "] = " .. maxLoot)
+RaidTrack.AddDebugMessage("Set lootSyncStates[" .. who .. "] = " .. maxLoot)
 
-            -- 🔁 Retry delta sync after full load
-            C_Timer.After(2, function()
-                RaidTrack.RequestSyncFromGuild()
-            end)
-            return
-        end
+
+    RaidTrack.AddDebugMessage("Full database received from " .. who)
+    RaidTrack.lastSyncTime = time() -- ✅ ustawienie czasu tutaj
+
+    if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
+    if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
+
+    -- 🔁 Retry delta sync after full load ONLY if new data was added
+    if RaidTrackDB.syncStates[UnitName("player")] == 0 or RaidTrackDB.lootSyncStates[UnitName("player")] == 0 then
+        C_Timer.After(2, function()
+            RaidTrack.RequestSyncFromGuild()
+        end)
+    else
+        RaidTrack.AddDebugMessage("No need to re-request after full sync (already up to date).")
+    end
+
+    return
+end
+
+
 
         -- 🔁 Normal delta merge
         RaidTrack.MergeEPGPChanges(data.epgpDelta)
-        local seen = {}
-        for _, e in ipairs(RaidTrackDB.lootHistory) do seen[e.id] = true end
-        local mx = RaidTrackDB.lootSyncStates[who] or 0
-        for _, e in ipairs(data.lootDelta or {}) do
-            if e.id and not seen[e.id] then
-                table.insert(RaidTrackDB.lootHistory, e)
-                seen[e.id] = true
-                if e.id > mx then mx = e.id end
-            end
-        end
-        RaidTrackDB.lootSyncStates[who] = mx
-        if RaidTrack.RefreshLootTab then
-            RaidTrack.RefreshLootTab()
-        end
+
+-- 🔁 After delta received, update sync state
+local newLastEP = 0
+for _, e in ipairs(data.epgpDelta or {}) do
+    if e.id and e.id > newLastEP then
+        newLastEP = e.id
+    end
+end
+if newLastEP > 0 then
+    RaidTrackDB.syncStates[who] = newLastEP
+    RaidTrackDB.syncStates[UnitName("player")] = newLastEP
+    RaidTrack.AddDebugMessage("Updated syncStates after delta: " .. newLastEP)
+end
+
+local seen = {}
+for _, e in ipairs(RaidTrackDB.lootHistory) do seen[e.id] = true end
+local mx = RaidTrackDB.lootSyncStates[who] or 0
+for _, e in ipairs(data.lootDelta or {}) do
+    if e.id and not seen[e.id] then
+        table.insert(RaidTrackDB.lootHistory, e)
+        seen[e.id] = true
+        if e.id > mx then mx = e.id end
+    end
+end
+RaidTrackDB.lootSyncStates[who] = mx
+if RaidTrack.RefreshLootTab then
+    RaidTrack.RefreshLootTab()
+end
+
     end
 end
 
@@ -558,12 +663,17 @@ end)  -- tutaj jest to jedyne zamknięcie funkcji i SetScript
 local function ClearRaidTrackDB()
     if RaidTrackDB then wipe(RaidTrackDB) end
     RaidTrackDB = {
-      settings={}, epgp={}, lootHistory={},
-      epgpLog={changes={}, lastId=0},
-      syncStates={}, lootSyncStates={}, lastPayloads={}
+      settings = {},
+      epgp = {},
+      lootHistory = {},
+      epgpLog = { changes = {}, lastId = 0 },
+      syncStates = {},
+      lootSyncStates = {},
+      lastPayloads = {}
     }
     RaidTrack.AddDebugMessage("Database cleared; reload UI.")
 end
+
 SLASH_RT_CLEARDATA1 = "/rtcleardb"
 SlashCmdList["RT_CLEARDATA"] = ClearRaidTrackDB
 
@@ -571,3 +681,58 @@ SlashCmdList["RT_CLEARDATA"] = ClearRaidTrackDB
 function RaidTrack.SendSyncData()
     RaidTrack.RequestSyncFromGuild()
 end
+
+
+local LDB = LibStub("LibDataBroker-1.1")
+local LDBIcon = LibStub("LibDBIcon-1.0")
+
+local ldbObject = LDB:NewDataObject("RaidTrack", {
+    type = "launcher",
+    text = "RaidTrack",
+    icon = "Interface\\Icons\\inv_misc_groupneedmore", -- Możesz zmienić
+    OnClick = function(_, button)
+        if RaidTrack.mainFrame:IsShown() then
+            RaidTrack.mainFrame:Hide()
+        else
+            RaidTrack.mainFrame:Show()
+            RaidTrack.ShowTab(1)
+        end
+    end,
+    OnTooltipShow = function(tt)
+    tt:AddLine("RaidTrack")
+    tt:AddLine("Left-click to open/close the addon", 1, 1, 1)
+
+    if RaidTrack.lastSyncTime then
+        local elapsed = math.floor(time() - RaidTrack.lastSyncTime)
+        local mins = math.floor(elapsed / 60)
+        local secs = elapsed % 60
+        local timeStr = string.format("%d min %d sec ago", mins, secs)
+        tt:AddLine("Last sync: " .. timeStr, 0.8, 0.8, 0.8)
+    else
+        tt:AddLine("Last sync: Never", 0.8, 0.8, 0.8)
+    end
+end
+
+})
+
+-- Domyślne ustawienia dla ikony
+RaidTrackDB.settings = RaidTrackDB.settings or {}
+RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {}
+
+-- Rejestruj ikonę, jeżeli jeszcze nie została zarejestrowana
+C_Timer.After(1, function()
+    if LDBIcon and not LDBIcon:IsRegistered("RaidTrack") then
+        LDBIcon:Register("RaidTrack", ldbObject, RaidTrackDB.settings.minimap)
+    end
+end)
+
+-- Dodaj funkcję statusu jeśli jeszcze jej nie masz
+function RaidTrack.GetSyncStatus()
+    local count = RaidTrack.lastDeltaCount or 0
+    if count == 0 then
+        return "Idle"
+    else
+        return string.format("Pending (%d events)", count)
+    end
+end
+
