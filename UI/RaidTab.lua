@@ -1,3 +1,4 @@
+-- UI/RaidTab.lua
 local addonName, RaidTrack = ...
 
 -- Ensure core structures exist
@@ -5,7 +6,6 @@ RaidTrack.tabs         = RaidTrack.tabs        or {}
 RaidTrack.tabFrames    = RaidTrack.tabFrames   or {}
 RaidTrack.selectedRaid = RaidTrack.selectedRaid or {}
 RaidTrack.lastRaidIdx  = RaidTrack.lastRaidIdx or nil
--- Add search filter state
 RaidTrack.searchFilter = RaidTrack.searchFilter or ""
 if not RaidTrack.mainFrame then return end
 
@@ -33,7 +33,7 @@ if not btn then
     RaidTrack.tabs[RAID_TAB_INDEX] = btn
 end
 
--- Search input above the list
+-- Search input
 local searchLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 searchLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -30)
 searchLabel:SetText("Search:")
@@ -46,7 +46,6 @@ searchInput:SetScript("OnTextChanged", function(self)
     RaidTrack.searchFilter = self:GetText():lower()
     RaidTrack.UpdateRaidList()
 end)
-
 -- Scroll frame and background
 local scroll = CreateFrame("ScrollFrame", "RaidTrackRaidScroll", frame, "UIPanelScrollFrameTemplate")
 scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -60)

@@ -13,12 +13,19 @@ Libs\Ace3\CallbackHandler-1.0\CallbackHandler-1.0.lua
 Libs/LibDataBroker-1.1/LibDataBroker-1.1.lua
 Libs/LibDBIcon-1.0/LibDBIcon-1.0.lua
 
-# Core file
+# --- Core ---
+Core/Debug.lua
 Core.lua
+Core/Util.lua
+Core/Database.lua
+Core/EPGP.lua
+Core/Sync.lua
 
-# Tabs
-RaidTab.lua
-EPGPTab.lua
-LootTab.lua
-SettingsTab.lua
-GuildTab.lua
+# --- UI ---
+UI/MainFrame.lua
+UI/Minimapicon.lua
+UI/RaidTab.lua
+UI/EPGPTab.lua
+UI/LootTab.lua
+UI/SettingsTab.lua
+UI/GuildTab.lua

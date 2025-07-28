@@ -123,7 +123,6 @@ applyBtn:SetScript("OnClick", function()
     RaidTrack.SendSyncData()
 end)
 
-
 -- Background grid
 local gridBg = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 gridBg:SetPoint("TOPLEFT", scroll, "TOPLEFT", -5, 5)
@@ -142,15 +141,19 @@ gridBg:SetBackdropBorderColor(0, 0, 0, 0.6)
 local uiRows = {}
 local function ClearUI()
     for _, row in ipairs(uiRows) do
-        if row.bg   then row.bg:Hide()   end
-        if row.icon then row.icon:Hide() end
-        if row.name then row.name:Hide() end
-        if row.pr   then row.pr:Hide()   end
+        for _, widget in pairs(row) do
+            if type(widget) == "table" and widget.Hide then
+                widget:Hide()
+            end
+        end
     end
     wipe(uiRows)
-    -- update count label
     local count = 0 for _ in pairs(RaidTrack.selectedGuild) do count = count + 1 end
     countLabel:SetText("Selected: " .. count)
+    -- also clear all children from content frame to avoid leftovers
+    for _, child in ipairs({ content:GetChildren() }) do
+        if child.Hide then child:Hide() end
+    end
 end
 
 -- Sorting helper
@@ -169,7 +172,6 @@ function RaidTrack.UpdateGuildRoster()
         GuildRoster()
     end
 
-    -- Gather data
     local total = (C_GuildInfo and C_GuildInfo.GetNumGuildMembers and C_GuildInfo.GetNumGuildMembers()) or GetNumGuildMembers()
     local data = {}
     local locToToken = {}
@@ -192,7 +194,6 @@ function RaidTrack.UpdateGuildRoster()
     table.sort(data, SortByPR)
     RaidTrack.currentGuildData = data
 
-    -- Draw headers
     local y = -10
     local headers = { "Name", "EP", "GP", "PR" }
     local xpos = { COL.name, COL.ep, COL.gp, COL.pr }
@@ -205,7 +206,6 @@ function RaidTrack.UpdateGuildRoster()
         tinsert(uiRows, { name = fs })
     end
 
-    -- Draw rows
     y = y - 20
     for idx, d in ipairs(data) do
         local function OnRowClick()
@@ -260,7 +260,7 @@ function RaidTrack.UpdateGuildRoster()
             fs:SetText(val)
             fs:SetTextColor(col.r, col.g, col.b)
             fs:SetDrawLayer("OVERLAY", 2)
-            tinsert(uiRows, { pr=fs })
+            tinsert(uiRows, { fs = fs })
         end
 
         y = y - 20
