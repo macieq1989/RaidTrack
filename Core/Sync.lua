@@ -211,7 +211,70 @@ mf:RegisterEvent("CHAT_MSG_ADDON")
 mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     if prefix ~= SYNC_PREFIX or sender == UnitName("player") then return end
     local who = Ambiguate(sender, "none")
+    if prefix ~= SYNC_PREFIX or sender == UnitName("player") then return end
+    local who = Ambiguate(sender, "none")
+
+    -- 🔽 Obsługa aukcji od lidera
+if msg:sub(1,13) == "AUCTION_ITEM|" then
+    local payload = msg:sub(14)
+
+    -- Logowanie przed deserializacją
+    RaidTrack.AddDebugMessage("Payload for AUCTION_ITEM: " .. payload)
+
+    local ok, data = RaidTrack.SafeDeserialize(payload)
+    if ok and data and data.auctionID and data.item then
+        RaidTrack.partialAuction = RaidTrack.partialAuction or {}
+        RaidTrack.partialAuction[data.auctionID] = RaidTrack.partialAuction[data.auctionID] or {
+            items = {},
+            leader = "",
+            started = 0,
+            duration = 0
+        }
+
+        table.insert(RaidTrack.partialAuction[data.auctionID].items, {
+            link = data.item.link,
+            gp = data.item.gp,
+            responses = {}
+        })
+
+        RaidTrack.AddDebugMessage("Received AUCTION_ITEM for auctionID: " .. data.auctionID)
+    else
+        RaidTrack.AddDebugMessage("Failed to deserialize AUCTION_ITEM")
+    end
+    return
+end
+
+
+if msg:sub(1,14) == "AUCTION_START|" then
+    local payload = msg:sub(15)
+
+    -- Logowanie przed deserializacją
+    RaidTrack.AddDebugMessage("Payload for AUCTION_START: " .. payload)
+
+    local ok, data = RaidTrack.SafeDeserialize(payload)
+
+    -- Logowanie wyników deserializacji
+    RaidTrack.AddDebugMessage("Payload ok: " .. tostring(ok))
+    RaidTrack.AddDebugMessage("Data type: " .. type(data))
+
+    if ok and data and data.auctionID then
+        C_Timer.After(0.3, function()
+            local auctionItems = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[data.auctionID] or {}
+            data.items = auctionItems
+            RaidTrack.ReceiveAuctionHeader(data)
+            RaidTrack.pendingAuctionItems[data.auctionID] = nil
+        end)
+    else
+        RaidTrack.AddDebugMessage("RaidTrack: Received invalid auction data from leader.")
+    end
+    return
+end
+
+
+
+
     if msg == "PING" then
+        RaidTrack.AddDebugMessage("Received PING from " .. who)
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PONG", "WHISPER", who)
         return
     elseif msg == "PONG" and RaidTrack.pendingSends[who] then
@@ -219,6 +282,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         RaidTrack.SendChunkBatch(who)
         return
     elseif msg == "PONG" then
+         RaidTrack.AddDebugMessage("Received PONG from " .. who)
         -- No data was pending, but PONG received -> treat as noop sync
         RaidTrack.lastSyncTime = time()
         RaidTrack.AddDebugMessage("Sync with " .. who .. " completed (no data).")
@@ -268,6 +332,10 @@ end
         RaidTrack.chunkBuffer[who] = nil
         local ok, data = RaidTrack.SafeDeserialize(full)
         if not ok then return end
+
+
+
+
 
         if data.full then
             RaidTrackDB.epgp = data.full.epgp or {}
@@ -346,6 +414,42 @@ end)
 -- to nic nie rób – już działa.
 
 -- Ale jeśli nie masz jej wcale (a była wcześniej), dodaj ją z powrotem:
+
+function RaidTrack.QueueChunkedSend(target, prefix, payload)
+    local str = RaidTrack.SafeSerialize(payload)
+    local total = math.ceil(#str / CHUNK_SIZE)
+    local chunks = {}
+
+    for i = 1, total do
+        chunks[i] = str:sub((i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
+    end
+
+    local sendTarget = target or "GUILD"
+    for idx, chunk in ipairs(chunks) do
+        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, string.format("%d|%d|%s", idx, total, chunk), sendTarget)
+    end
+end
+
+
+function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, serializedData)
+    local fullPayload = {
+        auctionID = auctionID,
+        type = "auction",
+        payload = serializedData,
+        subtype = messageType
+    }
+
+    -- Logowanie przed wysyłką
+    RaidTrack.AddDebugMessage("Sending auction data for auctionID: " .. auctionID)
+    RaidTrack.AddDebugMessage("Serialized auction data: " .. serializedData)
+
+    RaidTrack.QueueChunkedSend(target, "auction", fullPayload)
+end
+
+
+
+
+
 function RaidTrack.SendSyncData()
     if RaidTrack.HandleSendSync then
         RaidTrack.HandleSendSync()
@@ -357,3 +461,87 @@ end
 function RaidTrack.HandleSendSync()
     RaidTrack.SendSyncDeltaToEligible()
 end
+
+function RaidTrack.ReceiveAuctionChunked(sender, rawData)
+    RaidTrack.AddDebugMessage("Raw auction chunk from " .. sender .. ": " .. tostring(rawData))
+    
+    -- Deserializujemy dane
+    local ok, data = RaidTrack.SafeDeserialize(rawData)
+    if not ok then
+        RaidTrack.AddDebugMessage("Failed to deserialize auction chunk!")
+        return
+    end
+
+    -- Debugowanie deserializowanych danych
+    RaidTrack.AddDebugMessage("Deserialized data type: " .. type(data))
+    if type(data) == "table" then
+        for k, v in pairs(data) do
+            local valType = type(v)
+            RaidTrack.AddDebugMessage("Key: " .. tostring(k) .. ", Value: " .. tostring(v) .. " (type: " .. valType .. ")")
+        end
+    else
+        RaidTrack.AddDebugMessage("Deserialized data is not a table, value: " .. tostring(data))
+    end
+
+    -- Inicjalizowanie aukcji
+    RaidTrack.partialAuction = RaidTrack.partialAuction or {}
+    local auctionID = data.auctionID
+
+    -- Sprawdzamy typ chunku (item, header, epgp)
+    if data.subtype == "item" then
+        -- Przetwarzamy dane przedmiotu
+        local itemOK, itemData = RaidTrack.SafeDeserialize(data.payload)
+        if itemOK and itemData and itemData.itemID then
+            table.insert(RaidTrack.pendingAuctionItems[auctionID], {
+                itemID = itemData.itemID,
+                gp = itemData.gp,
+                link = select(2, GetItemInfo(itemData.itemID)) or "item:" .. itemData.itemID,
+                responses = {}
+            })
+            RaidTrack.AddDebugMessage("Added auction item: " .. tostring(itemData.itemID))
+        else
+            RaidTrack.AddDebugMessage("Invalid auction item data!")
+        end
+
+    elseif data.subtype == "header" then
+        -- Przetwarzamy nagłówek aukcji
+        local headerOK, headerData = RaidTrack.SafeDeserialize(data.payload)
+        if headerOK and headerData then
+            C_Timer.After(0.1, function()
+                local items = RaidTrack.pendingAuctionItems[auctionID] or {}
+                RaidTrack.AddDebugMessage("Opening Auction UI for auctionID: " .. tostring(auctionID) .. ", items: " .. tostring(#items))
+                -- Otwieramy UI po zebraniu wszystkich danych
+                RaidTrack.OpenAuctionParticipantUI({
+                    auctionID = auctionID,
+                    leader = headerData.leader,
+                    started = headerData.started,
+                    duration = headerData.duration,
+                    items = items
+                })
+                RaidTrack.pendingAuctionItems[auctionID] = nil
+            end)
+        else
+            RaidTrack.AddDebugMessage("Invalid auction header data!")
+        end
+
+    elseif data.subtype == "epgp" then
+        -- Przetwarzamy dane EPGP
+        local epgpOK, epgpData = RaidTrack.SafeDeserialize(data.payload)
+        if epgpOK and epgpData then
+            RaidTrack.AddDebugMessage("Received EPGP data for auctionID: " .. auctionID)
+            if type(epgpData) ~= "table" then
+                RaidTrack.AddDebugMessage("EPGP data is not a table!")
+            else
+                RaidTrack.MergeEPGPChanges(epgpData)
+            end
+        else
+            RaidTrack.AddDebugMessage("Invalid EPGP data!")
+        end
+
+    else
+        RaidTrack.AddDebugMessage("Unknown auction chunk subtype: " .. tostring(data.subtype))
+    end
+end
+
+
+
