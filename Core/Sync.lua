@@ -516,14 +516,20 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
         error("QueueAuctionChunkedSend: input must be a table")
     end
 
+    -- Unikalne przypisanie identyfikatorów do przedmiotów
+    for idx, item in ipairs(payloadTable) do
+        -- Nadaj unikalny identyfikator dla każdego przedmiotu
+        item.uniqueItemID = item.itemID .. "_" .. idx
+    end
+
     local fullPayload = {
         auctionID = auctionID,
         type = "auction",
-        payload = payloadTable, -- <-- NIE SERIALIZUJ TUTAJ
+        payload = payloadTable,
         subtype = messageType
     }
 
-    -- Serializujemy dopiero całość na końcu
+    -- Serializujemy całość na końcu
     local serialized = RaidTrack.SafeSerialize(fullPayload)
 
     RaidTrack.AddDebugMessage("Sending auction data for auctionID: " .. auctionID)
@@ -533,17 +539,6 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
     RaidTrack.QueueChunkedSend(target, "auction", serialized)
 end
 
-function RaidTrack.SendSyncData()
-    if RaidTrack.HandleSendSync then
-        RaidTrack.HandleSendSync()
-    else
-        RaidTrack.AddDebugMessage("SendSyncData: Sync system not initialized")
-    end
-end
-
-function RaidTrack.HandleSendSync()
-    RaidTrack.SendSyncDeltaToEligible()
-end
 
 function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     if rawData:sub(1, 8) == "RTCHUNK^" then
@@ -555,121 +550,86 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     -- 1. Deserializacja warstwy zewnętrznej
     local ok, data = RaidTrack.SafeDeserialize(rawData)
 
-    -- Zabezpieczenie przed duplikatami z innych uczestników
-    RaidTrack._receivedAuctions = RaidTrack._receivedAuctions or {}
-    RaidTrack._receivedAuctionCounters = RaidTrack._receivedAuctionCounters or {}
-
-    -- Inicjalizuj licznik dla tego typu
-    RaidTrack._receivedAuctionCounters[data.auctionID] = RaidTrack._receivedAuctionCounters[data.auctionID] or {}
-    local counter = RaidTrack._receivedAuctionCounters[data.auctionID]
-
-    -- Unikalny klucz z licznikiem
-    counter[data.subtype] = (counter[data.subtype] or 0) + 1
-    local chunkKey = tostring(data.auctionID) .. "::" .. tostring(data.subtype) .. "::" .. tostring(counter[data.subtype])
-
-    -- Zabezpieczenie przed kompletnymi duplikatami (na wypadek resendów)
-    if RaidTrack._receivedAuctions[chunkKey] then
-        RaidTrack.AddDebugMessage("Duplicate auction chunk received: " .. chunkKey)
-        return
-    end
-    RaidTrack._receivedAuctions[chunkKey] = true
-
     if not ok then
         RaidTrack.AddDebugMessage("Failed to deserialize auction chunk!")
         return
     end
 
-    -- Debug: logujemy co przyszło w chunku
+    -- Debug log: Sprawdzamy co przyszło w danych
     RaidTrack.AddDebugMessage("ReceiveAuctionChunked: subtype=" .. tostring(data.subtype) .. ", auctionID=" .. tostring(data.auctionID))
 
-    -- Awaryjnie: jeśli nie ma subtype, nie przetwarzaj dalej
-    if not data.subtype then
-        RaidTrack.AddDebugMessage("ReceiveAuctionChunked: missing subtype! Dumping rawData:")
-        RaidTrack.AddDebugMessage(tostring(rawData))
-        return
-    end
-
-    -- 2. Sprawdzenie typu i subtype
+    -- 2. Sprawdzenie poprawności typu i subtype
     if data.type ~= "auction" then
         RaidTrack.AddDebugMessage("Invalid chunk type: " .. tostring(data.type))
         return
     end
 
-    local auctionID = data.auctionID
-    if not auctionID then
-        RaidTrack.AddDebugMessage("Missing auctionID in chunk")
-        return
-    end
-
-    -- 3. Inicjalizacja item buffer
+    -- 3. Inicjalizacja i zabezpieczenie przed duplikatami
     RaidTrack.pendingAuctionItems = RaidTrack.pendingAuctionItems or {}
-    RaidTrack.pendingAuctionItems[auctionID] = RaidTrack.pendingAuctionItems[auctionID] or {}
+    RaidTrack.pendingAuctionItems[data.auctionID] = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
-    -- Zmienna globalna do śledzenia już wysłanych przedmiotów w aukcji
+    -- Zmienna do śledzenia już widzianych przedmiotów w tej aukcji
     RaidTrack.auctionSeenItems = RaidTrack.auctionSeenItems or {}
 
-    -- 4. Obsługa itemów
+    -- 4. Obsługa przedmiotów (item)
     if data.subtype == "item" then
-        -- Tworzymy tabelę, jeśli jej nie ma
-        RaidTrack.pendingAuctionItems[auctionID] = RaidTrack.pendingAuctionItems[auctionID] or {}
-
-        -- Wczytujemy dane przedmiotu
-        local itemData = data.payload -- NIE deserialize — już zostało!
+        local itemData = data.payload
         if itemData and itemData.itemID then
             -- Unikalny identyfikator przedmiotu w tej aukcji
-            local uniqueItemID = tostring(itemData.itemID) .. "_" .. (#RaidTrack.pendingAuctionItems[auctionID] + 1)
+            local uniqueItemID = tostring(itemData.itemID) .. "_" .. data.auctionID
 
-            -- Zabezpieczenie przed dodaniem duplikatów
+            -- Sprawdzamy, czy już dodaliśmy ten przedmiot do aukcji
             if RaidTrack.auctionSeenItems[uniqueItemID] then
                 RaidTrack.AddDebugMessage("Duplicate item detected, skipping itemID: " .. itemData.itemID)
                 return
             end
 
-            -- Zapisz ten przedmiot, aby uniknąć duplikacji
+            -- Jeżeli przedmiot nie jest duplikatem, dodajemy go do listy
             RaidTrack.auctionSeenItems[uniqueItemID] = true
 
-            -- Dodajemy przedmiot do aukcji
-            table.insert(RaidTrack.pendingAuctionItems[auctionID], {
+            table.insert(RaidTrack.pendingAuctionItems[data.auctionID], {
                 itemID = itemData.itemID,
-                uniqueItemID = uniqueItemID, -- Dodajemy unikalny identyfikator
+                uniqueItemID = uniqueItemID,  -- Dodajemy unikalny identyfikator
                 gp = itemData.gp,
                 link = select(2, GetItemInfo(itemData.itemID)) or "item:" .. itemData.itemID,
                 responses = {}
             })
+
             RaidTrack.AddDebugMessage("Added auction item: " .. uniqueItemID)
         else
             RaidTrack.AddDebugMessage("Invalid auction item data!")
         end
-
     elseif data.subtype == "header" then
         local headerData = data.payload
         if headerData then
+            -- Otwarcie UI po ściągnięciu przedmiotów
             local tries = 0
             local maxTries = 10
 
             local function tryOpenUI()
                 tries = tries + 1
-                local items = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[auctionID] or {}
+                local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
                 if type(items) == "table" and #items > 0 then
-                    RaidTrack.AddDebugMessage("Header received. Items: " .. tostring(#items))
-                    RaidTrack.AddDebugMessage("First itemID: " .. tostring(items[1].itemID))
-                    RaidTrack.AddDebugMessage("Opening Auction UI for auctionID: " .. tostring(auctionID))
+                    RaidTrack.AddDebugMessage("Header received. Items count: " .. tostring(#items))
 
+                    -- Otwieramy UI z przedmiotami
                     RaidTrack.OpenAuctionParticipantUI({
-                        auctionID = auctionID,
+                        auctionID = data.auctionID,
                         leader = headerData.leader,
                         started = headerData.started,
                         duration = headerData.duration,
                         items = items
                     })
 
-                    RaidTrack.pendingAuctionItems[auctionID] = nil
+                    -- Czyścimy listę przedmiotów po otwarciu UI
+                    RaidTrack.pendingAuctionItems[data.auctionID] = nil
                 elseif tries < maxTries then
+                    -- Powtarzamy próby w przypadku braku przedmiotów
                     C_Timer.After(0.5, tryOpenUI)
                 else
-                    RaidTrack.AddDebugMessage("Header received, but no items found after retries. AuctionID: " .. tostring(auctionID))
-                    RaidTrack.pendingAuctionItems[auctionID] = nil
+                    RaidTrack.AddDebugMessage("Header received, but no items found after retries. AuctionID: " .. tostring(data.auctionID))
+                    RaidTrack.pendingAuctionItems[data.auctionID] = nil
                 end
             end
 
@@ -679,6 +639,12 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
         end
     end
 end
+
+
+
+
+
+
 
 
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)

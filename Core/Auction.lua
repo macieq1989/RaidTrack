@@ -54,17 +54,24 @@ function RaidTrack.StartAuction(items, duration)
 
     -- Przesyłanie każdego przedmiotu w aukcji
     for _, item in ipairs(items) do
-        RaidTrack.AddDebugMessage("Adding itemID=" .. tostring(item.itemID) .. ", gp=" .. tostring(item.gp))
-        if item.itemID and item.gp then
-            -- Dodajemy item do listy przedmiotów w aukcji
+    RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(item.itemID) .. ", gp=" .. tostring(item.gp))
+    if item.itemID and item.gp then
+        -- Check if item is already in the auction list (avoiding duplicates)
+        local duplicate = false
+        for _, existingItem in ipairs(activeAuction.items) do
+            if existingItem.itemID == item.itemID then
+                duplicate = true
+                break
+            end
+        end
+        if not duplicate then
             table.insert(activeAuction.items, {
                 itemID = item.itemID,
                 gp = item.gp, -- Cena przedmiotu (GP)
                 link = select(2, GetItemInfo(item.itemID)) or "item:" .. item.itemID,
                 responses = {}
             })
-
-            -- Budujemy payload jako TABELĘ (NIE serializujemy tutaj!)
+            -- Send item data
             local itemData = {
                 auctionID = auctionID,
                 itemID = item.itemID,
@@ -72,16 +79,15 @@ function RaidTrack.StartAuction(items, duration)
                 epgpChanges = {}
             }
 
-            -- Debug + wysyłka
-            RaidTrack.AddDebugMessage("Sending auction chunk for itemID=" .. item.itemID .. " with payload: " ..
-                                          RaidTrack.SafeSerialize(itemData))
             RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", itemData)
-
         else
-            RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " ..
-                                          tostring(item.gp))
+            RaidTrack.AddDebugMessage("Duplicate item skipped: itemID=" .. tostring(item.itemID))
         end
+    else
+        RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " .. tostring(item.gp))
     end
+end
+
 
     -- Serializowanie nagłówka aukcji
     RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "header", {
