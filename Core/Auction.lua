@@ -1,6 +1,7 @@
 -- Core/Auction.lua
 local addonName, RaidTrack = ...
 RaidTrack.auction = RaidTrack.auction or {}
+RaidTrack.pendingAuctionItems = RaidTrack.pendingAuctionItems or {}
 
 local SYNC_PREFIX = "RaidTrackAuction"
 
@@ -10,9 +11,9 @@ local auctionResponses = {}
 -- Auction Types
 local AUCTION_TYPES = {
     MAIN_SPEC = "MS",
-    OFF_SPEC  = "OS",
-    TRANSMOG  = "TM",
-    PASS      = "PASS"
+    OFF_SPEC = "OS",
+    TRANSMOG = "TM",
+    PASS = "PASS"
 }
 
 -- Start an auction (only leader/officer)
@@ -20,7 +21,8 @@ local AUCTION_TYPES = {
 -- Wysyłanie danych aukcji
 -- Start an auction (only leader/officer)
 function RaidTrack.StartAuction(items, duration)
-    RaidTrack.AddDebugMessage("StartAuction called by: " .. tostring(UnitName("player")) .. " | Officer status: " .. tostring(RaidTrack.IsOfficer()))
+    RaidTrack.AddDebugMessage("StartAuction called by: " .. tostring(UnitName("player")) .. " | Officer status: " ..
+                                  tostring(RaidTrack.IsOfficer()))
     print("=== DEBUG: StartAuction WYWOŁANA ===")
     RaidTrack.AddDebugMessage("=== DEBUG: StartAuction WYWOŁANA ===")
     print("Dostałem items: ", items, "liczba:", items and #items or 0)
@@ -57,52 +59,50 @@ function RaidTrack.StartAuction(items, duration)
             -- Dodajemy item do listy przedmiotów w aukcji
             table.insert(activeAuction.items, {
                 itemID = item.itemID,
-                gp = item.gp,  -- Cena przedmiotu (GP)
+                gp = item.gp, -- Cena przedmiotu (GP)
                 link = select(2, GetItemInfo(item.itemID)) or "item:" .. item.itemID,
                 responses = {}
             })
 
-            -- Logowanie danych przed serializacją
-            RaidTrack.AddDebugMessage("Preparing to serialize item with itemID=" .. item.itemID .. " and GP=" .. item.gp)
-
-            -- Serializowanie przedmiotu, z oddzieleniem gp i epgpChanges
-            local itemPayload = RaidTrack.SafeSerialize({
+            -- Budujemy payload jako TABELĘ (NIE serializujemy tutaj!)
+            local itemData = {
                 auctionID = auctionID,
                 itemID = item.itemID,
-                gp = item.gp,  -- Cena przedmiotu
-                epgpChanges = {}  -- Brak zmian EPGP na tym etapie
-            })
-            RaidTrack.AddDebugMessage("Serialized item payload: " .. itemPayload) 
+                gp = item.gp,
+                epgpChanges = {}
+            }
 
-            -- Wysyłamy dany przedmiot w postaci chunku
-            RaidTrack.AddDebugMessage("Sending auction chunk for itemID=" .. item.itemID .. " with payload: " .. itemPayload)
-            RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", itemPayload)
+            -- Debug + wysyłka
+            RaidTrack.AddDebugMessage("Sending auction chunk for itemID=" .. item.itemID .. " with payload: " ..
+                                          RaidTrack.SafeSerialize(itemData))
+            RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", itemData)
+
         else
-            RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " .. tostring(item.gp))
+            RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " ..
+                                          tostring(item.gp))
         end
     end
 
-
     -- Serializowanie nagłówka aukcji
-    local headerPayload = RaidTrack.SafeSerialize({
+    RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "header", {
         leader = UnitName("player"),
         started = time(),
         duration = duration
     })
 
-    local finalPayload = RaidTrack.SafeSerialize({
-        auctionID = auctionID,
-        type = "header",
-        payload = headerPayload
-    })
-
-    -- Logowanie przed wysyłką nagłówka aukcji
-    RaidTrack.AddDebugMessage("Serialized auction header data: " .. finalPayload)
-    -- Wysyłamy nagłówek aukcji po wszystkich przedmiotach
-    RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "header", finalPayload)
-
     -- Logowanie zakończenia przygotowań aukcji
     RaidTrack.AddDebugMessage("Auction started with ID: " .. auctionID)
+
+    -- 🔽 Otwórz Auction UI u lidera po 0.5s
+    C_Timer.After(0.5, function()
+        RaidTrack.OpenAuctionParticipantUI({
+            auctionID = auctionID,
+            leader = UnitName("player"),
+            started = time(),
+            duration = duration,
+            items = items
+        })
+    end)
 
     -- Zakończenie aukcji po czasie trwania
     C_Timer.After(duration, function()
@@ -111,11 +111,10 @@ function RaidTrack.StartAuction(items, duration)
 
     -- Po zakończeniu aukcji, wysyłamy zmiany EPGP
     C_Timer.After(duration + 1, function()
-        local epgpChanges = {}  -- Przygotuj zmiany EPGP (np. 0)
+        local epgpChanges = {} -- Przygotuj zmiany EPGP (np. 0)
         RaidTrack.SendEPGPChanges(epgpChanges)
     end)
 end
-
 
 function RaidTrack.SendEPGPChanges(changes)
     -- Zapewnienie, że changes to tabela
@@ -127,7 +126,8 @@ function RaidTrack.SendEPGPChanges(changes)
     -- Logowanie przed wysyłką
     RaidTrack.AddDebugMessage("Sending EPGP changes:")
     for _, change in ipairs(changes) do
-        RaidTrack.AddDebugMessage("  Player: " .. tostring(change.player) .. ", ItemID: " .. tostring(change.itemID) .. ", GP: " .. tostring(change.gp) .. ", Choice: " .. tostring(change.choice))
+        RaidTrack.AddDebugMessage("  Player: " .. tostring(change.player) .. ", ItemID: " .. tostring(change.itemID) ..
+                                      ", GP: " .. tostring(change.gp) .. ", Choice: " .. tostring(change.choice))
     end
 
     -- Serializowanie danych
@@ -138,8 +138,6 @@ function RaidTrack.SendEPGPChanges(changes)
     RaidTrack.AddDebugMessage("Serialized EPGP changes: " .. payload)
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, payload, "GUILD")
 end
-
-
 
 function RaidTrack.SendAuctionData(data)
     local serializedData = RaidTrack.SafeSerialize(data)
@@ -158,7 +156,6 @@ function RaidTrack.SendAuctionData(data)
     RaidTrack.AddDebugMessage("Auction data sent with " .. totalChunks .. " chunk(s).")
 end
 
-
 function RaidTrack.ReceiveAuctionData(sender, rawData)
     -- Logowanie surowych danych przed deserializacją
     RaidTrack.AddDebugMessage("Raw data received from " .. sender .. ": " .. rawData)
@@ -174,7 +171,8 @@ function RaidTrack.ReceiveAuctionData(sender, rawData)
     RaidTrack.AddDebugMessage("Deserialized auction data: " .. tostring(data))
     RaidTrack.AddDebugMessage("Auction ID: " .. tostring(data.auctionID))
     RaidTrack.AddDebugMessage("Items: " .. tostring(data.items))
-    RaidTrack.AddDebugMessage("Received auction data: auctionID = " .. data.auctionID .. ", items count = " .. #data.items)
+    RaidTrack.AddDebugMessage("Received auction data: auctionID = " .. data.auctionID .. ", items count = " ..
+                                  #data.items)
 
     -- Jeśli brak danych aukcji lub itemów, wyświetl komunikat
     if not data or not data.auctionID or not data.items then
@@ -193,7 +191,12 @@ function RaidTrack.ReceiveAuctionData(sender, rawData)
     local auction = RaidTrack.partialAuction[data.auctionID]
     if not auction then
         -- Tworzymy nową aukcję, jeśli nie istnieje
-        auction = { items = {}, leader = "", started = 0, duration = 0 }
+        auction = {
+            items = {},
+            leader = "",
+            started = 0,
+            duration = 0
+        }
         RaidTrack.partialAuction[data.auctionID] = auction
     end
 
@@ -224,11 +227,12 @@ function RaidTrack.ReceiveAuctionData(sender, rawData)
     end
 end
 
-
 RaidTrack.partialAuction = RaidTrack.partialAuction or {}
 
 function RaidTrack.ReceiveAuctionItem(data)
-    if not data.auctionID or not data.item or not data.item.itemID then return end
+    if not data.auctionID or not data.item or not data.item.itemID then
+        return
+    end
 
     local auctionID = data.auctionID
     local itemID = tonumber(data.item.itemID)
@@ -236,60 +240,53 @@ function RaidTrack.ReceiveAuctionItem(data)
 
     -- Get or initialize auction data
     RaidTrack.partialAuction = RaidTrack.partialAuction or {}
-    local entry = RaidTrack.partialAuction[auctionID] or { items = {} }
+    local entry = RaidTrack.partialAuction[auctionID] or {
+        items = {}
+    }
     RaidTrack.partialAuction[auctionID] = entry
 
-    local function TryInsertItem(attemptsLeft)
-        local itemName, itemLink = GetItemInfo(itemID)
-        if itemLink then
-            table.insert(entry.items, {
-                itemID = itemID,
-                link = itemLink,
-                gp = gp,
-                responses = {}
-            })
-            RaidTrack.AddDebugMessage("Item link resolved: " .. itemLink)
-        elseif attemptsLeft > 0 then
-            C_Timer.After(0.5, function()
-                TryInsertItem(attemptsLeft - 1)
-            end)
-        else
-            RaidTrack.AddDebugMessage("Failed to resolve item link for itemID " .. tostring(itemID))
-        end
+local function TryInsertItem(attemptsLeft)
+    local itemName, itemLink = GetItemInfo(itemData.itemID)
+    if itemLink then
+        table.insert(RaidTrack.pendingAuctionItems[auctionID], {
+            itemID = itemData.itemID,
+            gp = itemData.gp,
+            link = itemLink,
+            responses = {}
+        })
+        RaidTrack.AddDebugMessage("Item link resolved: " .. itemLink)
+    elseif attemptsLeft > 0 then
+        C_Timer.After(0.5, function()
+            TryInsertItem(attemptsLeft - 1)
+        end)
+    else
+        RaidTrack.AddDebugMessage("Failed to resolve item link for itemID " .. tostring(itemData.itemID))
+    end
+end
+
+TryInsertItem(5)
+
+end
+function RaidTrack.EndAuction()
+    if not activeAuction then
+        return
     end
 
-    -- Try to insert item info, retry up to 5 times
-    TryInsertItem(5)
-end
-
-
-
-
-
-
-
-function RaidTrack.EndAuction()
-    if not activeAuction then return end
-
     for _, item in ipairs(activeAuction.items) do
-    RaidTrack.AddDebugMessage("Auction ended for item: " .. (item.link or "nil"))
+        RaidTrack.AddDebugMessage("Auction ended for item: " .. (item.link or "nil"))
 
-end
+    end
 
     RaidTrack.ShowAuctionResults()
     activeAuction = nil
     auctionResponses = {}
 end
 
-
-
-
-
-
-
 -- Submit response
 function RaidTrack.SubmitAuctionResponse(choice)
-    if not activeAuction then return end
+    if not activeAuction then
+        return
+    end
     local payload = RaidTrack.SafeSerialize({
         response = {
             from = UnitName("player"),
@@ -301,10 +298,10 @@ function RaidTrack.SubmitAuctionResponse(choice)
     RaidTrack.HideAuctionPopup()
 end
 
-
-
 function RaidTrack.ShowAuctionResults()
-    if not activeAuction then return end
+    if not activeAuction then
+        return
+    end
 
     RaidTrack.AddDebugMessage("Auction Results:")
     for _, item in ipairs(activeAuction.items) do
@@ -315,16 +312,18 @@ function RaidTrack.ShowAuctionResults()
     end
 end
 
-
 -- Event handler
 local f = CreateFrame("Frame")
 f:RegisterEvent("CHAT_MSG_ADDON")
 f:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
-    if prefix ~= SYNC_PREFIX or sender == UnitName("player") then return end
-
+    if prefix ~= SYNC_PREFIX or sender == UnitName("player") then
+        return
+    end
 
     local ok, data = RaidTrack.SafeDeserialize(msg)
-    if not ok then return end
+    if not ok then
+        return
+    end
 
     if data.auction then
         RaidTrack.ReceiveAuction(data)
@@ -334,7 +333,9 @@ f:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
 end)
 
 function RaidTrack:HandleAuctionResponse(auctionID, itemLink, sender, response)
-    if not activeAuction or activeAuction.auctionID ~= auctionID then return end
+    if not activeAuction or activeAuction.auctionID ~= auctionID then
+        return
+    end
 
     for _, item in ipairs(activeAuction.items) do
         if item.link == itemLink then
@@ -357,9 +358,9 @@ function RaidTrack.ReceiveAuctionResponse(data)
     local itemID = tonumber(data.response.itemID)
 
     -- Jeśli nie ma aktywnej aukcji lub brak przedmiotów, kończymy
-    if not activeAuction or not activeAuction.items then 
+    if not activeAuction or not activeAuction.items then
         RaidTrack.AddDebugMessage("No active auction or items.")
-        return 
+        return
     end
 
     -- Przeszukujemy listę przedmiotów w aukcji
@@ -375,22 +376,31 @@ function RaidTrack.ReceiveAuctionResponse(data)
                     player = player,
                     itemID = itemID,
                     choice = choice,
-                    gp = item.gp,  -- Dodajemy cenę GP przedmiotu
-                    epgpChanges = {}  -- Będziemy tu wstawiać zmiany EPGP
+                    gp = item.gp, -- Dodajemy cenę GP przedmiotu
+                    epgpChanges = {} -- Będziemy tu wstawiać zmiany EPGP
                 }
 
                 -- Dodajemy zmiany EPGP do tabeli
                 -- Na razie epgpChanges jest pustą tabelą, ale możesz wprowadzić konkretne zmiany w zależności od "choice"
                 if choice == "MS" then
-                    epgpChange.epgpChanges = { ep = 10, gp = item.gp }  -- Przykładowe zmiany dla Main Spec
+                    epgpChange.epgpChanges = {
+                        ep = 10,
+                        gp = item.gp
+                    } -- Przykładowe zmiany dla Main Spec
                 elseif choice == "OS" then
-                    epgpChange.epgpChanges = { ep = 5, gp = item.gp }  -- Przykładowe zmiany dla Off Spec
+                    epgpChange.epgpChanges = {
+                        ep = 5,
+                        gp = item.gp
+                    } -- Przykładowe zmiany dla Off Spec
                 elseif choice == "TMOG" then
-                    epgpChange.epgpChanges = { ep = 0, gp = item.gp }  -- Przykładowe zmiany dla Transmog
+                    epgpChange.epgpChanges = {
+                        ep = 0,
+                        gp = item.gp
+                    } -- Przykładowe zmiany dla Transmog
                 end
 
                 -- Wysyłamy zmiany EPGP
-                RaidTrack.SendEPGPChanges({ epgpChange })
+                RaidTrack.SendEPGPChanges({epgpChange})
             end
             return
         end
@@ -399,11 +409,11 @@ function RaidTrack.ReceiveAuctionResponse(data)
     RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " not found in active auction.")
 end
 
-
-
 function RaidTrack.ReceiveAuctionHeader(data)
     local auctionID = data.auctionID
-    if not auctionID then return end
+    if not auctionID then
+        return
+    end
 
     RaidTrack.partialAuction = RaidTrack.partialAuction or {}
     RaidTrack.partialAuction[auctionID] = RaidTrack.partialAuction[auctionID] or {
@@ -440,7 +450,6 @@ function RaidTrack.ReceiveAuctionHeader(data)
     tryShowAuction()
 end
 
-
 function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, responseType)
     local payload = RaidTrack.SafeSerialize({
         auctionID = auctionID,
@@ -472,3 +481,37 @@ function RaidTrack.ReceiveAuctionBidChunked(data)
 
     RaidTrack.AddDebugMessage("Matching item not found for received bid: itemID=" .. tostring(data.itemID))
 end
+local OPEN_AUCTION_PREFIX = "OPEN_AUCTION"
+
+-- Funkcja obsługująca odebraną wiadomość OPEN_AUCTION
+local function OnOpenAuctionMessageReceived(msg)
+    local auctionID = msg
+    RaidTrack.AddDebugMessage("Received OPEN_AUCTION message for auctionID: " .. tostring(auctionID))
+    if not auctionID then
+        return
+    end
+
+    local items = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[auctionID]
+    if items and #items > 0 then
+        RaidTrack.AddDebugMessage("Opening Auction UI for auctionID: " .. auctionID)
+        -- Otwieramy UI z danymi aukcji
+        RaidTrack.OpenAuctionParticipantUI({
+            auctionID = auctionID,
+            leader = "", -- Możesz tu dodać lidera jeśli masz
+            started = 0, -- Możesz tu dodać czas startu jeśli masz
+            duration = 0, -- Możesz tu dodać czas trwania jeśli masz
+            items = items
+        })
+    else
+        RaidTrack.AddDebugMessage("No auction items found for auctionID: " .. auctionID)
+    end
+end
+
+-- Rejestracja eventu do nasłuchiwania na wiadomości OPEN_AUCTION
+local frame = CreateFrame("Frame")
+frame:RegisterEvent("CHAT_MSG_ADDON")
+frame:SetScript("OnEvent", function(self, event, prefix, message, channel, sender)
+    if prefix == OPEN_AUCTION_PREFIX and sender ~= UnitName("player") then
+        OnOpenAuctionMessageReceived(message)
+    end
+end)
