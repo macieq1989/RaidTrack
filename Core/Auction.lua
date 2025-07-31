@@ -549,3 +549,27 @@ frame:SetScript("OnEvent", function(self, event, prefix, message, channel, sende
         OnOpenAuctionMessageReceived(message)
     end
 end)
+function RaidTrack.UpdateLeaderResponseLocally(auctionID, responseData)
+    local auctionData = RaidTrack.activeAuctions[auctionID]
+    if not auctionData then
+        RaidTrack.AddDebugMessage("Auction not found for auctionID: " .. tostring(auctionID))
+        return
+    end
+
+    -- Przeszukiwanie przedmiotów w aukcji i aktualizacja odpowiedzi lidera
+    for _, item in ipairs(auctionData.items) do
+        if item.itemID == responseData.itemID then
+            for _, bid in ipairs(item.bids) do
+                if bid.from == responseData.from then
+                    bid.choice = responseData.choice
+                    RaidTrack.AddDebugMessage("Updated leader response locally: " .. responseData.choice .. " for itemID " .. tostring(item.itemID))
+                    break
+                end
+            end
+            break
+        end
+    end
+
+    -- Zaktualizowanie UI lidera
+    RaidTrack.UpdateAuctionLeaderUI(auctionID)
+end

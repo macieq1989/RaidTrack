@@ -188,4 +188,53 @@ function RaidTrack.UpdateItemResponseInUI(auctionID, item)
     RaidTrack.AddDebugMessage("UI updated for itemID " .. tostring(item.itemID))
 end
 
+function RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
+    RaidTrack.AddDebugMessage("Updating leader auction UI for auctionID: " .. tostring(auctionID))
+
+    -- Sprawdzamy, czy okno odpowiedzi lidera już istnieje
+    if not RaidTrack.auctionResponseWindows then
+        RaidTrack.auctionResponseWindows = {}
+    end
+
+    -- Jeśli okno odpowiedzi lidera już istnieje, aktualizujemy je
+    local frame = RaidTrack.auctionResponseWindows[auctionID]
+    if not frame then
+        RaidTrack.AddDebugMessage("Creating new auction response window for auctionID " .. tostring(auctionID))
+
+        -- Tworzymy nowe okno odpowiedzi lidera
+        frame = AceGUI:Create("Frame")
+        frame:SetTitle("Responses for Item: " .. (item.link or "Item " .. item.itemID))
+        frame:SetStatusText("Auction ID: " .. auctionID)
+        frame:SetLayout("List")
+        frame:SetWidth(500)
+        frame:SetHeight(400)
+        frame:EnableResize(true)
+        RaidTrack.auctionResponseWindows[auctionID] = frame
+    else
+        -- Jeśli okno już istnieje, usuwamy dzieci i aktualizujemy je
+        frame:ReleaseChildren()  -- Bezpiecznie usuwamy wszystkie dzieci
+    end
+
+    -- Nagłówek
+    local header = AceGUI:Create("Label")
+    header:SetFullWidth(true)
+    header:SetText("Responses for: " .. (item.link or "ItemID: " .. tostring(item.itemID)))
+    frame:AddChild(header)
+
+    -- Wyświetlenie ofert (bids)
+    RaidTrack.AddDebugMessage("Displaying bids for itemID " .. tostring(item.itemID))
+
+    -- Dodajemy odpowiedzi lidera do okna
+    for _, response in ipairs(item.bids or {}) do
+        local ep, gp, pr = GetEPGP(response.from)
+
+        local label = AceGUI:Create("Label")
+        label:SetFullWidth(true)
+        label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
+        frame:AddChild(label)
+    end
+
+    RaidTrack.AddDebugMessage("UI updated for itemID " .. tostring(item.itemID))
+end
+
 

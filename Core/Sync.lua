@@ -543,8 +543,8 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
     local fullPayload = {
         auctionID = auctionID,
         type = "auction",
-        payload = payloadTable,  -- Dodajemy tabelę przedmiotów z odpowiedziami
-        subtype = messageType  -- Typ wiadomości (np. "item" lub "response")
+        payload = payloadTable, -- Dodajemy tabelę przedmiotów z odpowiedziami
+        subtype = messageType -- Typ wiadomości (np. "item" lub "response")
     }
 
     -- Serializowanie całości na końcu
@@ -557,11 +557,6 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
     -- Wywołanie funkcji wysyłania chunków
     RaidTrack.QueueChunkedSend(target, "auction", serialized)
 end
-
-
-
-
-
 
 function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     if rawData:sub(1, 8) == "RTCHUNK^" then
@@ -596,17 +591,32 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
         if itemData and itemData.itemID then
             RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(itemData.itemID))
 
-            local uniqueItemID = tostring(itemData.itemID) .. "_" .. data.auctionID
+            -- Sprawdzamy, czy przedmiot już istnieje w aukcji
+            local itemExists = false
+            for _, item in ipairs(RaidTrack.pendingAuctionItems[data.auctionID]) do
+                if item.itemID == itemData.itemID then
+                    itemExists = true
+                    break
+                end
+            end
 
-            table.insert(RaidTrack.pendingAuctionItems[data.auctionID], {
-                itemID = itemData.itemID,
-                uniqueItemID = uniqueItemID,
-                gp = itemData.gp,
-                responses = {}
-            })
+            -- Jeśli przedmiot nie istnieje, dodajemy go
+            if not itemExists then
+                local uniqueItemID = tostring(itemData.itemID) .. "_" .. data.auctionID
 
-            if not RaidTrack.auctionLeaderWindow then
-                RaidTrack.OpenAuctionLeaderUI()
+                table.insert(RaidTrack.pendingAuctionItems[data.auctionID], {
+                    itemID = itemData.itemID,
+                    uniqueItemID = uniqueItemID,
+                    gp = itemData.gp,
+                    responses = {}
+                })
+
+                -- Otwieramy okno lidera aukcji, jeśli jeszcze nie zostało otwarte
+                if not RaidTrack.auctionLeaderWindow then
+                    RaidTrack.OpenAuctionLeaderUI()
+                end
+            else
+                RaidTrack.AddDebugMessage("Item with itemID=" .. tostring(itemData.itemID) .. " already exists, skipping.")
             end
         else
             RaidTrack.AddDebugMessage("Invalid auction item data!")
@@ -618,6 +628,7 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
         if headerData then
             local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
+            -- Otwieramy okno uczestnika aukcji (dla lidera i innych uczestników)
             RaidTrack.OpenAuctionParticipantUI({
                 auctionID = data.auctionID,
                 leader = headerData.leader,
@@ -627,24 +638,30 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
             })
 
             -- Zamiast usuwać, przenieś do activeAuctions
-RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
-RaidTrack.activeAuctions[data.auctionID] = {
-    items = RaidTrack.pendingAuctionItems[data.auctionID],
-    leader = headerData.leader,
-    started = headerData.started,
-    duration = headerData.duration
-}
-RaidTrack.pendingAuctionItems[data.auctionID] = nil
+            RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
+            RaidTrack.activeAuctions[data.auctionID] = {
+                items = RaidTrack.pendingAuctionItems[data.auctionID],
+                leader = headerData.leader,
+                started = headerData.started,
+                duration = headerData.duration
+            }
+            RaidTrack.pendingAuctionItems[data.auctionID] = nil
 
         else
             RaidTrack.AddDebugMessage("Invalid auction header data!")
         end
 
-    -- ✅ Obsługa subtype = response
+    -- Obsługa subtype = response
     elseif data.subtype == "response" then
         if data.payload then
-            RaidTrack.AddDebugMessage("==> Calling HandleAuctionResponse for auctionID " .. tostring(data.auctionID))
-            RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
+            -- Jeśli odpowiedź pochodzi od lidera, otwieramy okno odpowiedzi lidera
+            if data.payload.from == RaidTrack.activeAuctions[data.auctionID].leader then
+                RaidTrack.AddDebugMessage("Leader response detected. Opening leader's response window.")
+                RaidTrack.OpenAuctionLeaderResponseWindow(data.auctionID, data.payload)
+            else
+                RaidTrack.AddDebugMessage("Handling response for participant.")
+                RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
+            end
         else
             RaidTrack.AddDebugMessage("Missing payload in auction response chunk!")
         end
@@ -653,6 +670,10 @@ RaidTrack.pendingAuctionItems[data.auctionID] = nil
         RaidTrack.AddDebugMessage("Unknown auction subtype: " .. tostring(data.subtype))
     end
 end
+
+
+
+
 
 
 
@@ -667,7 +688,7 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
     end
 
     local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
-local auctionItems = auctionData and auctionData.items
+    local auctionItems = auctionData and auctionData.items
 
     if not auctionItems then
         RaidTrack.AddDebugMessage("ERROR: No auction items found for auctionID " .. tostring(auctionID))
@@ -686,19 +707,48 @@ local auctionItems = auctionData and auctionData.items
             matched = true
             RaidTrack.AddDebugMessage("Matched itemID " .. tostring(itemID) .. " with response itemID " .. tostring(responseItemID))
 
+            -- Inicjalizacja tabeli bidów dla przedmiotu, jeśli jeszcze nie istnieje
             if not item.bids then
                 item.bids = {}
                 RaidTrack.AddDebugMessage("Initialized bids table for itemID " .. tostring(itemID))
             end
 
-            table.insert(item.bids, responseData)
-            RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
+            -- Sprawdzamy, czy odpowiedź od gracza już istnieje
+            local responseExists = false
+            for _, bid in ipairs(item.bids) do
+                if bid.from == responseData.from then
+                    -- Jeśli odpowiedź już istnieje, nadpisujemy ją
+                    bid.choice = responseData.choice
+                    responseExists = true
+                    RaidTrack.AddDebugMessage("Updated response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " for itemID " .. tostring(itemID))
+                    break
+                end
+            end
+
+            -- Jeśli odpowiedzi jeszcze nie ma, dodajemy ją
+            if not responseExists then
+                -- Jeśli odpowiedź to "Pass", traktujemy to jako brak odpowiedzi
+                if responseData.choice == "PASS" then
+                    RaidTrack.AddDebugMessage("Player " .. responseData.from .. " passed on itemID " .. tostring(itemID) .. ", not adding response.")
+                else
+                    table.insert(item.bids, responseData)
+                    RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
+                end
+            end
+
+            -- **Aktualizacja okna lidera** tylko jeśli odpowiedź pochodzi od lidera
+            if responseData.from == auctionData.leader then
+                RaidTrack.AddDebugMessage("Leader response detected. Updating leader's response window locally.")
+                RaidTrack.UpdateLeaderAuctionUI(auctionID, item)  -- Aktualizujemy okno lidera
+            end
+
+            -- **Aktualizacja UI dla uczestnika aukcji**
+            RaidTrack.UpdateItemResponseInUI(auctionID, item)
 
             RaidTrack.DebugPrintResponses(item)
 
             RaidTrack.AddDebugMessage("Total bids for itemID " .. tostring(itemID) .. ": " .. tostring(#item.bids))
 
-            RaidTrack.UpdateItemResponseInUI(auctionID, item)
             break
         else
             RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " .. tostring(responseItemID))
@@ -707,48 +757,14 @@ local auctionItems = auctionData and auctionData.items
 
     if matched then
         if RaidTrack.RefreshAuctionLeaderTabs then
-    RaidTrack.RefreshAuctionLeaderTabs()
-end
+            RaidTrack.RefreshAuctionLeaderTabs()
+        end
 
         RaidTrack.AddDebugMessage("Refreshed tabs after adding response")
     else
         RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " .. tostring(responseData.itemID))
     end
 end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
