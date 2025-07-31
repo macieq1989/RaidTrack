@@ -47,6 +47,8 @@ function RaidTrack.StartAuction(items, duration)
         started = time(),
         duration = duration
     }
+    RaidTrack.auctionsByID = RaidTrack.auctionsByID or {}
+RaidTrack.auctionsByID[auctionID] = activeAuction
 
     -- Rejestrujemy lokalnie dane w activeAuctions dla lidera (ważne!)
     RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}

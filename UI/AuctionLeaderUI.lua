@@ -236,5 +236,3 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
 
     RaidTrack.AddDebugMessage("UI updated for itemID " .. tostring(item.itemID))
 end
-
-

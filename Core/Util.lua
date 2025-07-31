@@ -141,18 +141,35 @@ function RaidTrack.GetEPGP(player)
     -- Zwracamy dane
     return playerEP, playerGP, playerPR
 end
-function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, responseType)
-    -- Tworzymy tabelę odpowiedzi
-    local responseData = {
-        auctionID = auctionID,
-        itemID = itemID,          -- itemID powinno być przekazywane
-        from = UnitName("player"), -- Nazwa gracza
-        choice = responseType     -- Typ odpowiedzi (np. Main Spec, Off Spec)
+function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, choice)
+    local from = UnitName("player")
+
+    local payload = {
+        auctionID = tostring(auctionID), -- ważne!
+        itemID = tonumber(itemID),
+        choice = choice,
+        from = from
     }
 
-    -- Wysyłamy odpowiedź do lidera aukcji
-    -- Przekazujemy tabelę (nie serializujemy jej, bo funkcja chce tabelę)
-    RaidTrack.QueueAuctionChunkedSend(UnitName("player"), auctionID, "response", responseData)
+    RaidTrack.QueueAuctionChunkedSend(nil, payload.auctionID, "response", payload)
+
+    -- Zawsze lokalnie przetwarzaj własną odpowiedź
+    RaidTrack.AddDebugMessage("Locally handling own response for " .. from)
+    C_Timer.After(0.05, function()
+        RaidTrack.HandleAuctionResponse(payload.auctionID, payload)
+    end)
+end
+
+
+
+function RaidTrack.IsLeader()
+    local playerName = UnitName("player")
+    local leaderName = RaidTrack.auction and RaidTrack.auction.leader
+
+    print("[RaidTrack] UnitName:", playerName)
+    print("[RaidTrack] Auction Leader:", leaderName)
+
+    return leaderName == playerName
 end
 
 

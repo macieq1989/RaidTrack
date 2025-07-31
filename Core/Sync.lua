@@ -680,18 +680,25 @@ end
 
 -- Funkcja do rejestrowania odpowiedzi
 function RaidTrack.HandleAuctionResponse(auctionID, responseData)
-    RaidTrack.AddDebugMessage("Handling response for auctionID " .. tostring(auctionID))
+    -- Typowe zabezpieczenie
+    if type(auctionID) ~= "string" and type(auctionID) ~= "number" then
+        RaidTrack.AddDebugMessage("ERROR: Invalid auctionID in responseData (type=" .. type(auctionID) .. ")")
+        return
+    end
 
-    if not responseData or not responseData.itemID or not responseData.from then
+    if not responseData or not responseData.itemID or not responseData.from or not responseData.choice then
         RaidTrack.AddDebugMessage("ERROR: Incomplete responseData")
         return
     end
+
+    auctionID = tostring(auctionID)  -- zawsze string, bo klucze w activeAuctions są stringami
+    RaidTrack.AddDebugMessage("Handling response for auctionID " .. auctionID)
 
     local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
     local auctionItems = auctionData and auctionData.items
 
     if not auctionItems then
-        RaidTrack.AddDebugMessage("ERROR: No auction items found for auctionID " .. tostring(auctionID))
+        RaidTrack.AddDebugMessage("ERROR: No auction items found for auctionID " .. auctionID)
         return
     end
 
@@ -707,17 +714,14 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
             matched = true
             RaidTrack.AddDebugMessage("Matched itemID " .. tostring(itemID) .. " with response itemID " .. tostring(responseItemID))
 
-            -- Inicjalizacja tabeli bidów dla przedmiotu, jeśli jeszcze nie istnieje
             if not item.bids then
                 item.bids = {}
                 RaidTrack.AddDebugMessage("Initialized bids table for itemID " .. tostring(itemID))
             end
 
-            -- Sprawdzamy, czy odpowiedź od gracza już istnieje
             local responseExists = false
             for _, bid in ipairs(item.bids) do
                 if bid.from == responseData.from then
-                    -- Jeśli odpowiedź już istnieje, nadpisujemy ją
                     bid.choice = responseData.choice
                     responseExists = true
                     RaidTrack.AddDebugMessage("Updated response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " for itemID " .. tostring(itemID))
@@ -725,30 +729,21 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
                 end
             end
 
-            -- Jeśli odpowiedzi jeszcze nie ma, dodajemy ją
-            if not responseExists then
-                -- Jeśli odpowiedź to "Pass", traktujemy to jako brak odpowiedzi
-                if responseData.choice == "PASS" then
-                    RaidTrack.AddDebugMessage("Player " .. responseData.from .. " passed on itemID " .. tostring(itemID) .. ", not adding response.")
-                else
-                    table.insert(item.bids, responseData)
-                    RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
-                end
+            if not responseExists and responseData.choice ~= "PASS" then
+                table.insert(item.bids, responseData)
+                RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
+            elseif responseData.choice == "PASS" then
+                RaidTrack.AddDebugMessage("Player " .. responseData.from .. " passed on itemID " .. tostring(itemID) .. ", not adding response.")
             end
 
-            -- **Aktualizacja okna lidera** tylko jeśli odpowiedź pochodzi od lidera
             if responseData.from == auctionData.leader then
                 RaidTrack.AddDebugMessage("Leader response detected. Updating leader's response window locally.")
-                RaidTrack.UpdateLeaderAuctionUI(auctionID, item)  -- Aktualizujemy okno lidera
+                RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
             end
 
-            -- **Aktualizacja UI dla uczestnika aukcji**
             RaidTrack.UpdateItemResponseInUI(auctionID, item)
-
             RaidTrack.DebugPrintResponses(item)
-
             RaidTrack.AddDebugMessage("Total bids for itemID " .. tostring(itemID) .. ": " .. tostring(#item.bids))
-
             break
         else
             RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " .. tostring(responseItemID))
@@ -759,12 +754,16 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
         if RaidTrack.RefreshAuctionLeaderTabs then
             RaidTrack.RefreshAuctionLeaderTabs()
         end
-
         RaidTrack.AddDebugMessage("Refreshed tabs after adding response")
     else
         RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " .. tostring(responseData.itemID))
     end
 end
+
+
+
+
+
 
 
 

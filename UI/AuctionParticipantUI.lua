@@ -49,30 +49,36 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
             btn:SetText(label)
             btn:SetWidth(80)
             btn:SetCallback("OnClick", function()
-                -- Wyciąganie danych EP, GP i PR lokalnie z bazy
-                local ep, gp, pr = RaidTrack.GetEPGP(UnitName("player")) -- Teraz funkcja GetEPGP działa poprawnie
+                -- Sprawdzanie, czy gracz to lider aukcji
+                local isLeader = UnitName("player") == auctionData.leader
+                local ep, gp, pr = RaidTrack.GetEPGP(UnitName("player"))
 
                 -- Tworzymy tabelę z odpowiedzią
                 local responseData = {
                     player = UnitName("player"),
-                    response = responseType, -- Typ odpowiedzi (Main Spec, Off Spec, itp.)
-                    ep = ep, -- EP gracza
-                    gp = gp, -- GP gracza
-                    pr = pr -- PR gracza (Priority Rating)
+                    response = responseType,
+                    ep = ep,
+                    gp = gp,
+                    pr = pr
                 }
 
-                -- Rejestrujemy odpowiedź dla danego przedmiotu
+                -- Dodajemy odpowiedź do przedmiotu aukcji
                 if not item.responses then
                     item.responses = {} -- Inicjalizujemy odpowiedzi, jeśli jeszcze nie istnieją
                 end
 
+                -- Zawsze dodajemy odpowiedź, nawet jeśli to lider
                 item.responses[UnitName("player")] = responseData
+
+                -- Jeśli lider aukcji, nie wyłączamy przycisku
+                if isLeader then
+                    btn:SetDisabled(false)
+                else
+                    btn:SetDisabled(true)
+                end
 
                 -- Wysyłamy odpowiedź do lidera aukcji
                 RaidTrack.SendAuctionResponseChunked(auctionData.auctionID, item.itemID, responseType)
-
-                -- Wyłączamy przycisk po kliknięciu
-                btn:SetDisabled(true)
             end)
             return btn
         end
@@ -87,10 +93,4 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
         frame:AddChild(itemGroup)
     end
 end
-
-
-
-
-
-
 
