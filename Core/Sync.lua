@@ -590,63 +590,142 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     RaidTrack.pendingAuctionItems = RaidTrack.pendingAuctionItems or {}
     RaidTrack.pendingAuctionItems[data.auctionID] = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
-    -- Sprawdzamy, czy przedmiot jest poprawnie przypisany
+    -- Obsługa subtype = item
     if data.subtype == "item" then
         local itemData = data.payload
         if itemData and itemData.itemID then
             RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(itemData.itemID))
 
-            -- Dodajemy przedmiot do listy aukcji
+            local uniqueItemID = tostring(itemData.itemID) .. "_" .. data.auctionID
+
             table.insert(RaidTrack.pendingAuctionItems[data.auctionID], {
                 itemID = itemData.itemID,
-                uniqueItemID = itemData.itemID .. "_" .. data.auctionID,
+                uniqueItemID = uniqueItemID,
                 gp = itemData.gp,
-                responses = {}  -- Inicjalizujemy pustą tabelę na odpowiedzi
+                responses = {}
             })
+
+            if not RaidTrack.auctionLeaderWindow then
+                RaidTrack.OpenAuctionLeaderUI()
+            end
         else
             RaidTrack.AddDebugMessage("Invalid auction item data!")
         end
+
+    -- Obsługa subtype = header
     elseif data.subtype == "header" then
-        -- Obsługa nagłówka aukcji
         local headerData = data.payload
         if headerData then
-            -- Otwieranie UI po ściągnięciu przedmiotów
-            local tries = 0
-            local maxTries = 10
+            local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
-            local function tryOpenUI()
-                tries = tries + 1
-                local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
+            RaidTrack.OpenAuctionParticipantUI({
+                auctionID = data.auctionID,
+                leader = headerData.leader,
+                started = headerData.started,
+                duration = headerData.duration,
+                items = items
+            })
 
-                if type(items) == "table" and #items > 0 then
-                    RaidTrack.AddDebugMessage("Header received. Items count: " .. tostring(#items))
+            -- Zamiast usuwać, przenieś do activeAuctions
+RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
+RaidTrack.activeAuctions[data.auctionID] = {
+    items = RaidTrack.pendingAuctionItems[data.auctionID],
+    leader = headerData.leader,
+    started = headerData.started,
+    duration = headerData.duration
+}
+RaidTrack.pendingAuctionItems[data.auctionID] = nil
 
-                    -- Otwieramy UI z przedmiotami
-                    RaidTrack.OpenAuctionParticipantUI({
-                        auctionID = data.auctionID,
-                        leader = headerData.leader,
-                        started = headerData.started,
-                        duration = headerData.duration,
-                        items = items
-                    })
-
-                    -- Czyścimy listę przedmiotów po otwarciu UI
-                    RaidTrack.pendingAuctionItems[data.auctionID] = nil
-                elseif tries < maxTries then
-                    -- Powtarzamy próby w przypadku braku przedmiotów
-                    C_Timer.After(0.5, tryOpenUI)
-                else
-                    RaidTrack.AddDebugMessage("Header received, but no items found after retries. AuctionID: " .. tostring(data.auctionID))
-                    RaidTrack.pendingAuctionItems[data.auctionID] = nil
-                end
-            end
-
-            tryOpenUI()
         else
             RaidTrack.AddDebugMessage("Invalid auction header data!")
         end
+
+    -- ✅ Obsługa subtype = response
+    elseif data.subtype == "response" then
+        if data.payload then
+            RaidTrack.AddDebugMessage("==> Calling HandleAuctionResponse for auctionID " .. tostring(data.auctionID))
+            RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
+        else
+            RaidTrack.AddDebugMessage("Missing payload in auction response chunk!")
+        end
+
+    else
+        RaidTrack.AddDebugMessage("Unknown auction subtype: " .. tostring(data.subtype))
     end
 end
+
+
+
+
+-- Funkcja do rejestrowania odpowiedzi
+function RaidTrack.HandleAuctionResponse(auctionID, responseData)
+    RaidTrack.AddDebugMessage("Handling response for auctionID " .. tostring(auctionID))
+
+    if not responseData or not responseData.itemID or not responseData.from then
+        RaidTrack.AddDebugMessage("ERROR: Incomplete responseData")
+        return
+    end
+
+    local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
+local auctionItems = auctionData and auctionData.items
+
+    if not auctionItems then
+        RaidTrack.AddDebugMessage("ERROR: No auction items found for auctionID " .. tostring(auctionID))
+        return
+    end
+
+    local matched = false
+
+    for _, item in ipairs(auctionItems) do
+        local itemID = tonumber(item.itemID)
+        local responseItemID = tonumber(responseData.itemID)
+
+        RaidTrack.AddDebugMessage("Checking itemID: " .. tostring(itemID) .. " against response itemID: " .. tostring(responseItemID))
+
+        if itemID == responseItemID then
+            matched = true
+            RaidTrack.AddDebugMessage("Matched itemID " .. tostring(itemID) .. " with response itemID " .. tostring(responseItemID))
+
+            if not item.bids then
+                item.bids = {}
+                RaidTrack.AddDebugMessage("Initialized bids table for itemID " .. tostring(itemID))
+            end
+
+            table.insert(item.bids, responseData)
+            RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
+
+            RaidTrack.DebugPrintResponses(item)
+
+            RaidTrack.AddDebugMessage("Total bids for itemID " .. tostring(itemID) .. ": " .. tostring(#item.bids))
+
+            RaidTrack.UpdateItemResponseInUI(auctionID, item)
+            break
+        else
+            RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " .. tostring(responseItemID))
+        end
+    end
+
+    if matched then
+        if RaidTrack.RefreshAuctionLeaderTabs then
+    RaidTrack.RefreshAuctionLeaderTabs()
+end
+
+        RaidTrack.AddDebugMessage("Refreshed tabs after adding response")
+    else
+        RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " .. tostring(responseData.itemID))
+    end
+end
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -2,6 +2,12 @@ local addonName, RaidTrack = ...
 local AceGUI = LibStub("AceGUI-3.0")
 
 function RaidTrack:OpenAuctionLeaderUI()
+    -- Inicjalizacja tablicy okien odpowiedzi, jeśli jeszcze nie istnieje
+    if not RaidTrack.auctionResponseWindows then
+        RaidTrack.auctionResponseWindows = {}
+        RaidTrack.AddDebugMessage("auctionResponseWindows initialized.")
+    end
+
     -- Sprawdzamy, czy okno aukcji już istnieje, jeśli tak, to je pokazujemy
     if self.auctionWindow then
         self.auctionWindow:Show()
@@ -48,73 +54,54 @@ function RaidTrack:OpenAuctionLeaderUI()
     tabGroup:SetHeight(200)
     tabGroup:SetTabs({})
 
-    -- Funkcja odświeżająca listę przedmiotów w TabGroup
     local function RefreshTabs()
+        RaidTrack.AddDebugMessage("Refreshing tabs...")
         local tabs = {}
         for idx, auction in ipairs(self.currentAuctions) do
             local itemID = auction.itemID
             local itemLink = itemID and select(2, GetItemInfo(itemID)) or "Item " .. tostring(idx)
+            local bidCount = #auction.bids
             table.insert(tabs, {
-                text = itemLink or "Unknown Item",
+                text = itemLink .. " (Bids: " .. bidCount .. ")",
                 value = tostring(idx)
             })
         end
         tabGroup:SetTabs(tabs)
+        RaidTrack.AddDebugMessage("Tabs refreshed")
     end
 
-    -- Callback dla kliknięcia na zakładkę przedmiotu
     tabGroup:SetCallback("OnGroupSelected", function(container, event, group)
         container:ReleaseChildren()
         local idx = tonumber(group)
         local auction = self.currentAuctions[idx]
-        if not auction then
-            return
-        end
+        if not auction then return end
 
         local label = AceGUI:Create("Label")
         label:SetText("Bids:")
         container:AddChild(label)
 
-        -- Debugowanie ofert
         RaidTrack.AddDebugMessage("Auction Item: " .. auction.itemID .. " Bids: " .. tostring(#auction.bids))
 
-        -- Wyświetlanie ofert dla danego przedmiotu
         for _, bid in ipairs(auction.bids or {}) do
-            -- Wyciąganie EP, GP, PR dla gracza
-            local ep, gp, pr = GetEPGP(bid.player)
-
-            -- Wyświetlanie oferty gracza
+            local ep, gp, pr = GetEPGP(bid.from)
             local bidLabel = AceGUI:Create("Label")
             bidLabel:SetFullWidth(true)
-            bidLabel:SetText(bid.player .. ": " .. bid.response .. " (EP: " .. ep .. ", GP: " .. gp .. ", PR: " ..
-                                 string.format("%.2f", pr) .. ")")
+            bidLabel:SetText(bid.from .. ": " .. bid.response .. " (EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ")")
             container:AddChild(bidLabel)
         end
 
-        -- Przycisk do usuwania przedmiotu z aukcji
-        local removeBtn = AceGUI:Create("Button")
-        removeBtn:SetText("Remove Item")
-        removeBtn:SetCallback("OnClick", function()
-            table.remove(self.currentAuctions, idx)
-            RefreshTabs()
-            tabGroup:SelectTab(nil)
-        end)
-        container:AddChild(removeBtn)
+        RefreshTabs()
     end)
 
-    -- Przycisk do rozpoczęcia aukcji dla wszystkich przedmiotów
     local startBtn = AceGUI:Create("Button")
     startBtn:SetText("Start Auction for All")
     startBtn:SetFullWidth(true)
     startBtn:SetCallback("OnClick", function()
-        if #self.currentAuctions == 0 then
-            return
-        end
-        local duration = 30 -- Czas trwania aukcji w sekundach
+        if #self.currentAuctions == 0 then return end
+        local duration = 30
         RaidTrack.StartAuction(self.currentAuctions, duration)
     end)
 
-    -- Przycisk do wyczyszczenia wszystkich przedmiotów z aukcji
     local clearBtn = AceGUI:Create("Button")
     clearBtn:SetText("Clear All")
     clearBtn:SetFullWidth(true)
@@ -124,43 +111,81 @@ function RaidTrack:OpenAuctionLeaderUI()
         tabGroup:SelectTab(nil)
     end)
 
-    -- Callback dla przycisku "Add Item"
     addItemBtn:SetCallback("OnClick", function()
         local itemText = itemInput:GetText()
         local gpCost = tonumber(gpInput:GetText()) or 0
-        if itemText == "" then
-            return
-        end
+        if itemText == "" then return end
 
-        -- Ekstrakcja itemID z tekstu
         local itemID = tonumber(string.match(itemText, "item:(%d+)"))
-
         if not itemID then
             RaidTrack.AddDebugMessage("Failed to extract itemID from input: " .. itemText)
             return
         end
 
-        -- Debugowanie: Sprawdzamy, czy itemID zostało poprawnie przypisane
         RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(itemID) .. ", gp=" .. tostring(gpCost))
 
-        -- Dodawanie przedmiotu do aukcji
         table.insert(self.currentAuctions, {
             itemID = itemID,
             gp = gpCost,
-            bids = {} -- Inicjalizowanie pustej tabeli dla ofert
+            bids = {}
         })
 
-        -- Odświeżenie zakładek
         RefreshTabs()
-        itemInput:SetText("") -- Czyszczenie inputu
+        itemInput:SetText("")
     end)
 
-    -- Dodanie wszystkich elementów do okna aukcji
     mainGroup:AddChild(itemInput)
     mainGroup:AddChild(gpInput)
     mainGroup:AddChild(addItemBtn)
     mainGroup:AddChild(tabGroup)
     mainGroup:AddChild(startBtn)
     mainGroup:AddChild(clearBtn)
+    RaidTrack.RefreshAuctionLeaderTabs = RefreshTabs
 end
+
+
+function RaidTrack.UpdateItemResponseInUI(auctionID, item)
+    RaidTrack.AddDebugMessage("Updating UI for auctionID " .. tostring(auctionID) .. " and itemID " .. tostring(item.itemID))
+
+    -- Sprawdzenie i utworzenie okna, jeśli nie istnieje
+    if not RaidTrack.auctionResponseWindows then
+        RaidTrack.auctionResponseWindows = {}
+    end
+
+    local frame = RaidTrack.auctionResponseWindows[auctionID]
+    if not frame then
+        RaidTrack.AddDebugMessage("Creating new auction response window for auctionID " .. tostring(auctionID))
+        frame = AceGUI:Create("Frame")
+        frame:SetTitle("Responses for Item: " .. (item.link or "Item " .. item.itemID))
+        frame:SetStatusText("Auction ID: " .. auctionID)
+        frame:SetLayout("List")
+        frame:SetWidth(500)
+        frame:SetHeight(400)
+        frame:EnableResize(true)
+        RaidTrack.auctionResponseWindows[auctionID] = frame
+    else
+        frame:ReleaseChildren()  -- 🔁 Usuwa wszystkie dzieci, bezpiecznie
+    end
+
+    -- Nagłówek
+    local header = AceGUI:Create("Label")
+    header:SetFullWidth(true)
+    header:SetText("Responses for: " .. (item.link or "ItemID: " .. tostring(item.itemID)))
+    frame:AddChild(header)
+
+    -- Wyświetlenie ofert (zakładamy że to tablica `bids`)
+    RaidTrack.AddDebugMessage("Displaying bids for itemID " .. tostring(item.itemID))
+
+    for _, response in ipairs(item.bids or {}) do
+        local ep, gp, pr = GetEPGP(response.from)
+
+        local label = AceGUI:Create("Label")
+        label:SetFullWidth(true)
+        label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
+        frame:AddChild(label)
+    end
+
+    RaidTrack.AddDebugMessage("UI updated for itemID " .. tostring(item.itemID))
+end
+
 

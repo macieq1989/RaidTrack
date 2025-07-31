@@ -78,5 +78,22 @@ function RaidTrack.WrapDebug(fn, fnName)
         return result
     end
 end
+function RaidTrack.DebugPrintResponses(item)
+    RaidTrack.AddDebugMessage("Printing responses for itemID: " .. tostring(item.itemID))
+
+    if not item.responses then
+        RaidTrack.AddDebugMessage("No responses found for itemID: " .. tostring(item.itemID))
+        return
+    end
+
+    -- Iteracja przez odpowiedzi i logowanie ich
+    for player, response in pairs(item.responses) do
+        local responseText = string.format("Player: %s, Response: %s, EP: %d, GP: %d, PR: %.2f",
+            player, response.response, response.ep, response.gp, response.pr)
+        
+        -- Wyświetlamy odpowiedź w logu
+        RaidTrack.AddDebugMessage(responseText)
+    end
+end
 
 

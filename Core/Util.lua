@@ -155,3 +155,4 @@ function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, responseType)
     RaidTrack.QueueAuctionChunkedSend(UnitName("player"), auctionID, "response", responseData)
 end
 
+
