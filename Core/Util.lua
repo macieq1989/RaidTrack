@@ -81,3 +81,77 @@ function RaidTrack.DebugTableToString(tbl)
     end
     return str
 end
+
+-- Funkcja do pobierania EP, GP i PR z bazy
+function GetEPGP(player)
+    -- Pobieramy dane EP i GP z bazy (domyślnie 0, jeśli nie ma danych)
+    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
+    
+    -- Obliczanie PR (Priority Rating) jako EP/GP
+    local pr = epgp.gp > 0 and epgp.ep / epgp.gp or 0
+    
+    return epgp.ep, epgp.gp, pr  -- Zwracamy EP, GP i PR
+end
+
+function RaidTrack.AddLootToLog(player, itemID, gp)
+    -- Dodajemy przedmiot do logu lootu
+    local lootEntry = {
+        player = player,
+        itemID = itemID,
+        gp = gp,
+        timestamp = time()  -- Dodajemy znacznik czasu
+    }
+    table.insert(RaidTrackDB.lootHistory, lootEntry)
+    RaidTrack.AddDebugMessage("Loot added for " .. player .. ": ItemID " .. itemID .. " with GP " .. gp)
+end
+
+function RaidTrack.AssignPointsToPlayer(player, gp)
+    -- Przypisanie punktów GP dla gracza
+    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
+    epgp.gp = epgp.gp + gp  -- Dodajemy GP
+    RaidTrackDB.epgp[player] = epgp
+    RaidTrack.AddDebugMessage("Assigned " .. gp .. " GP to player " .. player)
+end
+function RaidTrack.GetSelectedItemID()
+    -- Zakładając, że masz dostęp do UI przedmiotów
+    -- Pobieramy obecnie wybrany przedmiot z UI
+    local selectedItem = RaidTrack.auctionParticipantWindow.selectedItem -- Zmienna z wybranym przedmiotem w UI
+
+    if selectedItem then
+        return selectedItem.itemID  -- Zwracamy itemID wybranego przedmiotu
+    else
+        return nil  -- Jeśli nie ma wybranego przedmiotu
+    end
+end
+function RaidTrack.GetEPGP(player)
+    -- Zakładam, że posiadasz bazę danych EPGP i chcesz zwrócić EP, GP oraz PR
+    -- Pobierz dane z bazy EPGP lub z innej lokalnej struktury danych
+
+    -- Przykład:
+    local playerEP, playerGP = 0, 0  -- Inicjalizacja domyślnych wartości EP i GP
+    local playerPR = 0               -- Inicjalizacja PR (Priority Rating)
+    
+    -- Znajdź dane dla gracza w bazie danych
+    if RaidTrackDB.epgp[player] then
+        playerEP = RaidTrackDB.epgp[player].EP or 0
+        playerGP = RaidTrackDB.epgp[player].GP or 0
+        playerPR = RaidTrackDB.epgp[player].PR or 0
+    end
+
+    -- Zwracamy dane
+    return playerEP, playerGP, playerPR
+end
+function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, responseType)
+    -- Tworzymy tabelę odpowiedzi
+    local responseData = {
+        auctionID = auctionID,
+        itemID = itemID,          -- itemID powinno być przekazywane
+        from = UnitName("player"), -- Nazwa gracza
+        choice = responseType     -- Typ odpowiedzi (np. Main Spec, Off Spec)
+    }
+
+    -- Wysyłamy odpowiedź do lidera aukcji
+    -- Przekazujemy tabelę (nie serializujemy jej, bo funkcja chce tabelę)
+    RaidTrack.QueueAuctionChunkedSend(UnitName("player"), auctionID, "response", responseData)
+end
+

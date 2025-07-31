@@ -54,40 +54,41 @@ function RaidTrack.StartAuction(items, duration)
 
     -- Przesyłanie każdego przedmiotu w aukcji
     for _, item in ipairs(items) do
-    RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(item.itemID) .. ", gp=" .. tostring(item.gp))
-    if item.itemID and item.gp then
-        -- Check if item is already in the auction list (avoiding duplicates)
-        local duplicate = false
-        for _, existingItem in ipairs(activeAuction.items) do
-            if existingItem.itemID == item.itemID then
-                duplicate = true
-                break
+        RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(item.itemID) .. ", gp=" ..
+                                      tostring(item.gp))
+        if item.itemID and item.gp then
+            -- Check if item is already in the auction list (avoiding duplicates)
+            local duplicate = false
+            for _, existingItem in ipairs(activeAuction.items) do
+                if existingItem.itemID == item.itemID then
+                    duplicate = true
+                    break
+                end
             end
-        end
-        if not duplicate then
-            table.insert(activeAuction.items, {
-                itemID = item.itemID,
-                gp = item.gp, -- Cena przedmiotu (GP)
-                link = select(2, GetItemInfo(item.itemID)) or "item:" .. item.itemID,
-                responses = {}
-            })
-            -- Send item data
-            local itemData = {
-                auctionID = auctionID,
-                itemID = item.itemID,
-                gp = item.gp,
-                epgpChanges = {}
-            }
+            if not duplicate then
+                table.insert(activeAuction.items, {
+                    itemID = item.itemID,
+                    gp = item.gp, -- Cena przedmiotu (GP)
+                    link = select(2, GetItemInfo(item.itemID)) or "item:" .. item.itemID,
+                    responses = {}
+                })
+                -- Send item data
+                local itemData = {
+                    auctionID = auctionID,
+                    itemID = item.itemID,
+                    gp = item.gp,
+                    epgpChanges = {}
+                }
 
-            RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", itemData)
+                RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", itemData)
+            else
+                RaidTrack.AddDebugMessage("Duplicate item skipped: itemID=" .. tostring(item.itemID))
+            end
         else
-            RaidTrack.AddDebugMessage("Duplicate item skipped: itemID=" .. tostring(item.itemID))
+            RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " ..
+                                          tostring(item.gp))
         end
-    else
-        RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " .. tostring(item.gp))
     end
-end
-
 
     -- Serializowanie nagłówka aukcji
     RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "header", {
@@ -251,28 +252,42 @@ function RaidTrack.ReceiveAuctionItem(data)
     }
     RaidTrack.partialAuction[auctionID] = entry
 
-local function TryInsertItem(attemptsLeft)
-    local itemName, itemLink = GetItemInfo(itemData.itemID)
-    if itemLink then
-        table.insert(RaidTrack.pendingAuctionItems[auctionID], {
-            itemID = itemData.itemID,
-            gp = itemData.gp,
-            link = itemLink,
-            responses = {}
-        })
-        RaidTrack.AddDebugMessage("Item link resolved: " .. itemLink)
-    elseif attemptsLeft > 0 then
-        C_Timer.After(0.5, function()
-            TryInsertItem(attemptsLeft - 1)
-        end)
-    else
-        RaidTrack.AddDebugMessage("Failed to resolve item link for itemID " .. tostring(itemData.itemID))
+    local function TryInsertItem(attemptsLeft)
+        -- Sprawdzamy, czy przedmiot już istnieje w liście aukcji
+        for _, existingItem in ipairs(RaidTrack.pendingAuctionItems[auctionID]) do
+            if existingItem.itemID == itemData.itemID then
+                RaidTrack.AddDebugMessage("Duplikat przedmiotu, pomijam: itemID=" .. tostring(itemData.itemID))
+                return
+            end
+        end
+
+        -- Próba pobrania informacji o przedmiocie
+        local itemName, itemLink = GetItemInfo(itemData.itemID)
+        if itemLink then
+            -- Dodajemy przedmiot do listy aukcji, jeśli link został rozwiązany
+            table.insert(RaidTrack.pendingAuctionItems[auctionID], {
+                itemID = itemData.itemID,
+                gp = itemData.gp,
+                link = itemLink,
+                responses = {}
+            })
+            RaidTrack.AddDebugMessage("Link do przedmiotu rozwiązany: " .. itemLink)
+        elseif attemptsLeft > 0 then
+            -- Jeśli link nie został rozwiązany, próbujemy ponownie po 0.5s
+            C_Timer.After(0.5, function()
+                TryInsertItem(attemptsLeft - 1)
+            end)
+        else
+            -- Jeśli po próbach nadal nie udało się rozwiązać linku, logujemy błąd
+            RaidTrack.AddDebugMessage("Nie udało się rozwiązać linku do przedmiotu o itemID " ..
+                                          tostring(itemData.itemID))
+        end
     end
+
+    -- Uruchomienie funkcji z maksymalną liczbą prób
+    TryInsertItem(5)
 end
 
-TryInsertItem(5)
-
-end
 function RaidTrack.EndAuction()
     if not activeAuction then
         return
@@ -456,16 +471,30 @@ function RaidTrack.ReceiveAuctionHeader(data)
     tryShowAuction()
 end
 
-function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, responseType)
-    local payload = RaidTrack.SafeSerialize({
+function RaidTrack.SendAuctionResponse(auctionID, responseType)
+    -- Pobieramy itemID z aktywnego okna aukcji (UI)
+    local selectedItemID = RaidTrack.GetSelectedItemID()
+    
+    if not selectedItemID then
+        RaidTrack.AddDebugMessage("Error: No item selected in the auction UI!")
+        return
+    end
+
+    -- Zbieramy dane odpowiedzi
+    local responseData = {
         auctionID = auctionID,
-        itemID = itemID,
+        itemID = selectedItemID,  -- Używamy itemID z UI
         from = UnitName("player"),
         choice = responseType
-    })
+    }
 
+    -- Wysyłamy odpowiedź do lidera aukcji
+    local payload = RaidTrack.SafeSerialize(responseData)
     RaidTrack.QueueAuctionChunkedSend(UnitName("player"), auctionID, "response", payload)
 end
+
+
+
 function RaidTrack.ReceiveAuctionBidChunked(data)
     if not data.auctionID or not data.itemID or not data.from or not data.choice then
         RaidTrack.AddDebugMessage("Invalid auction bid chunk received.")

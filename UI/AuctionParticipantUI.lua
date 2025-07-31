@@ -10,32 +10,12 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
     RaidTrack.AddDebugMessage("OpenAuctionParticipantUI() called")
     print("==== OpenAuctionParticipantUI CALLED ====")
 
-    -- Najważniejsze: dokładny debug wejścia
-    RaidTrack.AddDebugMessage("Opening UI for auctionID: " .. tostring(auctionData.auctionID))
-    RaidTrack.AddDebugMessage("Item count: " .. tostring(#auctionData.items))
-
-    if auctionData and auctionData.items then
-        RaidTrack.AddDebugMessage("RAW items: " .. (RaidTrack.SafeSerialize(auctionData.items) or "nil"))
-    else
-        RaidTrack.AddDebugMessage("Brak auctionData lub auctionData.items!")
-    end
-
-    -- Standardowe checki
-    if not auctionData then
-        RaidTrack.AddDebugMessage("auctionData is nil!")
-    elseif not auctionData.items then
-        RaidTrack.AddDebugMessage("auctionData.items is nil!")
-    elseif type(auctionData.items) ~= "table" then
-        RaidTrack.AddDebugMessage("auctionData.items is not a table! Got: " .. type(auctionData.items))
-    elseif #auctionData.items == 0 then
-        RaidTrack.AddDebugMessage("auctionData.items is an empty table!")
-    end
-
-    -- Sprawdzanie, czy okno jest już otwarte
+    -- Sprawdzamy, czy okno jest już otwarte
     if RaidTrack.auctionParticipantWindow then
         RaidTrack.auctionParticipantWindow:Hide()
     end
 
+    -- Tworzymy okno dla uczestnika aukcji
     local frame = AceGUI:Create("Frame")
     frame:SetTitle("RaidTrack Auction")
     frame:SetStatusText("Select your response for each item")
@@ -45,9 +25,10 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
     frame:EnableResize(false)
     RaidTrack.auctionParticipantWindow = frame
 
-    -- Pełny debug każdej rzeczy
+    -- Iteracja przez przedmioty w aukcji
     for i, item in ipairs(auctionData.items) do
-        RaidTrack.AddDebugMessage(string.format("ParticipantUI item %d: id=%s, gp=%s, link=%s", i, tostring(item.itemID), tostring(item.gp), tostring(item.link)))
+        RaidTrack.AddDebugMessage(string.format("ParticipantUI item %d: id=%s, gp=%s, link=%s", i,
+            tostring(item.itemID), tostring(item.gp), tostring(item.link)))
 
         local itemGroup = AceGUI:Create("InlineGroup")
         itemGroup:SetFullWidth(true)
@@ -61,22 +42,49 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
         gpLabel:SetWidth(60)
         itemGroup:AddChild(gpLabel)
 
+        -- Funkcja do tworzenia przycisków odpowiedzi
+        -- Funkcja do tworzenia przycisków odpowiedzi
         local function CreateResponseButton(label, responseType)
             local btn = AceGUI:Create("Button")
             btn:SetText(label)
             btn:SetWidth(80)
             btn:SetCallback("OnClick", function()
+                -- Wyciąganie danych EP, GP i PR lokalnie z bazy
+                local ep, gp, pr = RaidTrack.GetEPGP(UnitName("player")) -- Teraz funkcja GetEPGP działa poprawnie
+
+                -- Tworzymy tabelę z odpowiedzią
+                local responseData = {
+                    player = UnitName("player"),
+                    response = responseType, -- Typ odpowiedzi (Main Spec, Off Spec, itp.)
+                    ep = ep, -- EP gracza
+                    gp = gp, -- GP gracza
+                    pr = pr -- PR gracza (Priority Rating)
+                }
+
+                -- Rejestrujemy odpowiedź dla danego przedmiotu
+                if not item.responses then
+                    item.responses = {} -- Inicjalizujemy odpowiedzi, jeśli jeszcze nie istnieją
+                end
+
+                item.responses[UnitName("player")] = responseData
+
+                -- Wysyłamy odpowiedź do lidera aukcji
                 RaidTrack.SendAuctionResponseChunked(auctionData.auctionID, item.itemID, responseType)
+
+                -- Wyłączamy przycisk po kliknięciu
                 btn:SetDisabled(true)
             end)
             return btn
         end
 
+        -- Dodanie przycisków wyboru odpowiedzi
         itemGroup:AddChild(CreateResponseButton("Main Spec", "MS"))
         itemGroup:AddChild(CreateResponseButton("Off Spec", "OS"))
         itemGroup:AddChild(CreateResponseButton("Transmog", "TMOG"))
         itemGroup:AddChild(CreateResponseButton("Pass", "PASS"))
 
+        -- Dodanie przedmiotu do okna aukcji
         frame:AddChild(itemGroup)
     end
 end
+
