@@ -1,6 +1,8 @@
 local AceGUI = LibStub("AceGUI-3.0")
 local addonPrefix = "RaidTrackAuction"
 
+
+
 function RaidTrack.OpenAuctionParticipantUI(auctionData)
     if not auctionData or type(auctionData) ~= "table" or not auctionData.items or #auctionData.items == 0 then
         RaidTrack.AddDebugMessage("Invalid auctionData received by participant UI.")
@@ -25,6 +27,23 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
     frame:EnableResize(false)
     RaidTrack.auctionParticipantWindow = frame
 
+    -- Ustawiamy pozycję okna na prawą stronę ekranu
+    frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -20, -200)
+
+    -- Tworzymy ScrollFrame, by dodać suwak
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetLayout("List")
+    scroll:SetFullWidth(true)
+    scroll:SetFullHeight(true)
+    frame:AddChild(scroll)
+
+    -- Liczymy ilość przedmiotów
+    local itemCount = #auctionData.items
+    local maxVisibleItems = 5  -- Limit widocznych przedmiotów
+    local itemHeight = 80      -- Wysokość pojedynczego przedmiotu (dostosuj do rzeczywistego rozmiaru)
+    local scrollHeight = math.min(itemCount, maxVisibleItems) * itemHeight
+    frame:SetHeight(scrollHeight + 80)  -- +80 dla paddingu lub miejsca na przyciski
+
     -- Iteracja przez przedmioty w aukcji
     for i, item in ipairs(auctionData.items) do
         RaidTrack.AddDebugMessage(string.format("ParticipantUI item %d: id=%s, gp=%s, link=%s", i,
@@ -42,7 +61,6 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
         gpLabel:SetWidth(60)
         itemGroup:AddChild(gpLabel)
 
-        -- Funkcja do tworzenia przycisków odpowiedzi
         -- Funkcja do tworzenia przycisków odpowiedzi
         local function CreateResponseButton(label, responseType)
             local btn = AceGUI:Create("Button")
@@ -90,7 +108,11 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
         itemGroup:AddChild(CreateResponseButton("Pass", "PASS"))
 
         -- Dodanie przedmiotu do okna aukcji
-        frame:AddChild(itemGroup)
+        scroll:AddChild(itemGroup)
     end
 end
+
+
+
+
 
