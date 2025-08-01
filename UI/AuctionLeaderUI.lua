@@ -192,16 +192,42 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
 
         RaidTrack.AddDebugMessage("Displaying responses for itemID: " .. tostring(item.itemID))
 
-        for _, response in ipairs(item.bids or {}) do
-            local ep, gp, pr = GetEPGP(response.from)
-            local label = AceGUI:Create("Label")
-            label:SetFullWidth(true)
-            local _, class = UnitClass(response.from)
-local color = (RAID_CLASS_COLORS[class] or { r = 1, g = 1, b = 1 })
-local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, response.from)
-label:SetText(coloredName .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
-            scrollContainer:AddChild(label)
-        end
+   -- Skopiuj odpowiedzi do nowej tabeli z PR i sort-key
+local sortedResponses = {}
+for _, response in ipairs(item.bids or {}) do
+    local ep, gp, pr = GetEPGP(response.from)
+    table.insert(sortedResponses, {
+        from = response.from,
+        choice = response.choice,
+        ep = ep,
+        gp = gp,
+        pr = pr
+    })
+end
+
+-- Sortuj wg: MS > OS > TMOG > PASS, a potem po PR malejąco
+local priorityOrder = { MS = 1, OS = 2, TMOG = 3, PASS = 4 }
+table.sort(sortedResponses, function(a, b)
+    local aRank = priorityOrder[a.choice] or 5
+    local bRank = priorityOrder[b.choice] or 5
+    if aRank ~= bRank then
+        return aRank < bRank
+    else
+        return a.pr > b.pr
+    end
+end)
+
+-- Renderuj posortowane odpowiedzi
+for _, r in ipairs(sortedResponses) do
+    local color = RAID_CLASS_COLORS[select(2, UnitClass(r.from)) or ""] or { r = 1, g = 1, b = 1 }
+    local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, r.from)
+
+    local label = AceGUI:Create("Label")
+    label:SetFullWidth(true)
+    label:SetText(coloredName .. " - EP: " .. r.ep .. ", GP: " .. r.gp .. ", PR: " .. string.format("%.2f", r.pr) .. ", Response: " .. r.choice)
+    scrollContainer:AddChild(label)
+end
+
     end
 
     RaidTrack.AddDebugMessage("Combined UI updated for auctionID: " .. tostring(auctionID))
