@@ -51,17 +51,45 @@ function RaidTrack.HasEPGPChange(id)
     return false
 end
 
--- Merge incoming EPGP changes
 function RaidTrack.MergeEPGPChanges(incoming)
+    -- Zabezpieczenie przed pustą lub błędnie przekazaną wartością
+    if type(incoming) ~= "table" then
+        RaidTrack.AddDebugMessage("MergeEPGPChanges: incoming is not a table! (" .. tostring(incoming) .. ")")
+        return  -- Jeśli incoming nie jest tabelą, kończymy funkcję
+    end
+
+    -- Debugowanie zawartości danych przed dalszym przetwarzaniem
+    RaidTrack.AddDebugMessage("MergeEPGPChanges: incoming is a table, containing: ")
+    for k, v in pairs(incoming) do
+        -- Dodajemy szczegóły o każdym elemencie, aby sprawdzić, czy to zmiana EPGP
+        RaidTrack.AddDebugMessage("  Key: " .. tostring(k) .. ", Value: " .. tostring(v) .. " (type: " .. type(v) .. ")")
+        
+        -- Jeśli to zmiana EPGP, powinna zawierać id, gp i epgpChanges (nie może zawierać 'gp' jako ceny przedmiotu)
+        if v.gp then
+            RaidTrack.AddDebugMessage("Ignoring 'gp' field in EPGP change since it's just an auction price: " .. tostring(v.gp))
+        end
+    end
+
+    -- Przetwarzanie zmian EPGP
     table.sort(incoming, function(a, b) return a.id < b.id end)
     for _, e in ipairs(incoming) do
+        -- Tylko zmiany, które mają id, są traktowane jako zmiany EPGP
         if e.id and not RaidTrack.HasEPGPChange(e.id) then
+            -- Dodajemy zmiany EPGP do bazy danych
             table.insert(RaidTrackDB.epgpLog.changes, e)
             RaidTrackDB.epgpLog.lastId = math.max(RaidTrackDB.epgpLog.lastId, e.id)
+            -- Zastosowanie zmiany EPGP
             RaidTrack.ApplyEPGPChange(e)
         end
     end
+
+    -- Aktualizacja listy EPGP
     if RaidTrack.UpdateEPGPList then
         RaidTrack.UpdateEPGPList()
     end
 end
+
+
+
+
+

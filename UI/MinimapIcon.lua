@@ -86,10 +86,20 @@ end
             end
         end, -35)
 
+   CreateMenuButton("Auction Panel", function()
+    if RaidTrack.OpenAuctionLeaderUI then
+        RaidTrack:OpenAuctionLeaderUI()
+    else
+        RaidTrack.AddDebugMessage("Auction window not available.")
+    end
+end, -60)
+
+
+
         CreateMenuButton("Hide Icon", function()
             RaidTrackDB.minimap.hide = true
             LibStub("LibDBIcon-1.0"):Hide("RaidTrack")
-        end, -60)
+        end, -85)
 
         -- Hide menu when clicking outside
         local listener = CreateFrame("Frame", nil, UIParent)

@@ -10,13 +10,23 @@ function RaidTrack.SafeSerialize(tbl)
     return AceSerializer:Serialize(tbl)
 end
 function RaidTrack.SafeDeserialize(str)
+    -- Logowanie przed deserializacją
+    RaidTrack.AddDebugMessage("Attempting to deserialize data: " .. tostring(str))
+
     local ok, payload = AceSerializer:Deserialize(str)
+
+    -- Logowanie w przypadku błędu deserializacji
     if not ok then
         RaidTrack.AddDebugMessage("Deserialize failed: " .. tostring(payload))
         return false, nil
     end
+
+    -- Logowanie po pomyślnej deserializacji
+    RaidTrack.AddDebugMessage("Deserialized data successfully: " .. tostring(payload))
+
     return true, payload
 end
+
 
 -- Debug helper
 function RaidTrack.AddDebugMessage(msg)
@@ -33,12 +43,14 @@ function RaidTrack.IsOfficer()
     if not IsInGuild() then return false end
     local myName = UnitName("player")
     for i = 1, GetNumGuildMembers() do
-        local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name and Ambiguate(name, "none") == myName then
-            
-            return rankIndex <= (RaidTrackDB.settings.minSyncRank or 1)
-        end
+    local name, _, rankIndex = GetGuildRosterInfo(i)
+    -- RaidTrack.AddDebugMessage("Roster: " .. tostring(name) .. " rank " .. tostring(rankIndex))
+    if name and Ambiguate(name, "none") == myName then
+        RaidTrack.AddDebugMessage("Matched player: " .. tostring(name) .. " rank " .. tostring(rankIndex))
+        return rankIndex <= (RaidTrackDB.settings.minSyncRank or 1)
     end
+end
+
     print(">> Could not find player in guild roster")
     return false
 end
@@ -61,3 +73,103 @@ function RaidTrack.GetSyncTimeAgo()
     local sec = elapsed % 60
     return string.format("%d min %d sec ago", min, sec)
 end
+function RaidTrack.DebugTableToString(tbl)
+    if type(tbl) ~= "table" then return tostring(tbl) end
+    local str = ""
+    for k, v in pairs(tbl) do
+        str = str .. tostring(k) .. "=" .. tostring(v) .. "; "
+    end
+    return str
+end
+
+-- Funkcja do pobierania EP, GP i PR z bazy
+function GetEPGP(player)
+    -- Pobieramy dane EP i GP z bazy (domyślnie 0, jeśli nie ma danych)
+    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
+    
+    -- Obliczanie PR (Priority Rating) jako EP/GP
+    local pr = epgp.gp > 0 and epgp.ep / epgp.gp or 0
+    
+    return epgp.ep, epgp.gp, pr  -- Zwracamy EP, GP i PR
+end
+
+function RaidTrack.AddLootToLog(player, itemID, gp)
+    -- Dodajemy przedmiot do logu lootu
+    local lootEntry = {
+        player = player,
+        itemID = itemID,
+        gp = gp,
+        timestamp = time()  -- Dodajemy znacznik czasu
+    }
+    table.insert(RaidTrackDB.lootHistory, lootEntry)
+    RaidTrack.AddDebugMessage("Loot added for " .. player .. ": ItemID " .. itemID .. " with GP " .. gp)
+end
+
+function RaidTrack.AssignPointsToPlayer(player, gp)
+    -- Przypisanie punktów GP dla gracza
+    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
+    epgp.gp = epgp.gp + gp  -- Dodajemy GP
+    RaidTrackDB.epgp[player] = epgp
+    RaidTrack.AddDebugMessage("Assigned " .. gp .. " GP to player " .. player)
+end
+function RaidTrack.GetSelectedItemID()
+    -- Zakładając, że masz dostęp do UI przedmiotów
+    -- Pobieramy obecnie wybrany przedmiot z UI
+    local selectedItem = RaidTrack.auctionParticipantWindow.selectedItem -- Zmienna z wybranym przedmiotem w UI
+
+    if selectedItem then
+        return selectedItem.itemID  -- Zwracamy itemID wybranego przedmiotu
+    else
+        return nil  -- Jeśli nie ma wybranego przedmiotu
+    end
+end
+function RaidTrack.GetEPGP(player)
+    -- Zakładam, że posiadasz bazę danych EPGP i chcesz zwrócić EP, GP oraz PR
+    -- Pobierz dane z bazy EPGP lub z innej lokalnej struktury danych
+
+    -- Przykład:
+    local playerEP, playerGP = 0, 0  -- Inicjalizacja domyślnych wartości EP i GP
+    local playerPR = 0               -- Inicjalizacja PR (Priority Rating)
+    
+    -- Znajdź dane dla gracza w bazie danych
+    if RaidTrackDB.epgp[player] then
+        playerEP = RaidTrackDB.epgp[player].EP or 0
+        playerGP = RaidTrackDB.epgp[player].GP or 0
+        playerPR = RaidTrackDB.epgp[player].PR or 0
+    end
+
+    -- Zwracamy dane
+    return playerEP, playerGP, playerPR
+end
+function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, choice)
+    local from = UnitName("player")
+
+    local payload = {
+        auctionID = tostring(auctionID), -- ważne!
+        itemID = tonumber(itemID),
+        choice = choice,
+        from = from
+    }
+
+    RaidTrack.QueueAuctionChunkedSend(nil, payload.auctionID, "response", payload)
+
+    -- Zawsze lokalnie przetwarzaj własną odpowiedź
+    RaidTrack.AddDebugMessage("Locally handling own response for " .. from)
+    C_Timer.After(0.05, function()
+        RaidTrack.HandleAuctionResponse(payload.auctionID, payload)
+    end)
+end
+
+
+
+function RaidTrack.IsLeader()
+    local playerName = UnitName("player")
+    local leaderName = RaidTrack.auction and RaidTrack.auction.leader
+
+    print("[RaidTrack] UnitName:", playerName)
+    print("[RaidTrack] Auction Leader:", leaderName)
+
+    return leaderName == playerName
+end
+
+
