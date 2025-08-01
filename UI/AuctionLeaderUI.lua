@@ -10,7 +10,9 @@ function RaidTrack:OpenAuctionLeaderUI()
 
     -- Sprawdzamy, czy okno aukcji już istnieje, jeśli tak, to je pokazujemy
     if self.auctionWindow then
-        self.auctionWindow:Show()
+        if self.auctionWindow.frame and not self.auctionWindow.frame:IsShown() then
+            self.auctionWindow.frame:Show()
+        end
         return
     end
 
@@ -171,7 +173,8 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
         if RaidTrack.auctionWindow then
             local anchor = RaidTrack.auctionWindow.frame or RaidTrack.auctionWindow
             if anchor.SetPoint then
-                frame:SetPoint("TOPRIGHT", anchor.frame or anchor, "TOPLEFT", -10, 0)
+                frame.frame:ClearAllPoints()
+                frame.frame:SetPoint("TOPRIGHT", anchor.frame or anchor, "TOPLEFT", -10, 0)
             end
         end
     else
@@ -198,20 +201,32 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
 
         local sortedResponses = {}
         for _, response in ipairs(item.bids or {}) do
-            local ep, gp, pr = GetEPGP(response.from)
-            table.insert(sortedResponses, {
-                from = response.from,
-                choice = response.choice,
-                ep = ep,
-                gp = gp,
-                pr = pr
-            })
+            if response.choice ~= "PASS" then
+                local ep, gp, pr = GetEPGP(response.from)
+                table.insert(sortedResponses, {
+                    from = response.from,
+                    choice = response.choice,
+                    ep = ep,
+                    gp = gp,
+                    pr = pr
+                })
+            else
+                RaidTrack.AddDebugMessage("Skipping response from " .. response.from .. " (PASS)")
+            end
         end
 
-        local priorityOrder = { MS = 1, OS = 2, TMOG = 3, PASS = 4 }
+        local priorityOrder = {
+            BIS = 1,
+            UP = 2,
+            OFF = 3,
+            DIS = 4,
+            TMOG = 5,
+            PASS = 6
+        }
+
         table.sort(sortedResponses, function(a, b)
-            local aRank = priorityOrder[a.choice] or 5
-            local bRank = priorityOrder[b.choice] or 5
+            local aRank = priorityOrder[a.choice] or 7
+            local bRank = priorityOrder[b.choice] or 7
             if aRank ~= bRank then
                 return aRank < bRank
             else
@@ -225,12 +240,17 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
             row:SetLayout("Flow")
 
             local _, class = UnitClass(r.from)
-            local color = RAID_CLASS_COLORS[class or ""] or { r = 1, g = 1, b = 1 }
-            local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, r.from)
+            local color = RAID_CLASS_COLORS[class or ""] or {
+                r = 1,
+                g = 1,
+                b = 1
+            }
+            local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255,
+                r.from)
 
             local icon = AceGUI:Create("Icon")
             icon:SetImageSize(18, 18)
-            local coords = CLASS_ICON_TCOORDS[class or "WARRIOR"] or { 0, 1, 0, 1 }
+            local coords = CLASS_ICON_TCOORDS[class or "WARRIOR"] or {0, 1, 0, 1}
             icon:SetImage("Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES", unpack(coords))
             icon:SetRelativeWidth(0.08)
             row:AddChild(icon)
@@ -265,15 +285,14 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
             respLabel.label:SetFontObject(GameFontNormal)
             row:AddChild(respLabel)
 
-          assignBtn = AceGUI:Create("Button")
-assignBtn:SetRelativeWidth(0.15)
-if assignBtn.text then
-    assignBtn.text:SetFontObject(GameFontNormal)
-end
-
+            assignBtn = AceGUI:Create("Button")
+            assignBtn:SetRelativeWidth(0.15)
+            if assignBtn.text then
+                assignBtn.text:SetFontObject(GameFontNormal)
+            end
 
             if item.assignedTo == r.from then
-                assignBtn:SetText("✔")
+                assignBtn:SetText("Assigned")
                 assignBtn:SetDisabled(true)
             else
                 assignBtn:SetText("Assign")
@@ -299,9 +318,12 @@ end
                     end
 
                     item.assignedTo = player
+                    item.awaitingTrade = true
+                    item.delivered = false
 
                     RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
-                    local lastId = (#RaidTrackDB.lootHistory > 0) and RaidTrackDB.lootHistory[#RaidTrackDB.lootHistory].id or 0
+                    local lastId = (#RaidTrackDB.lootHistory > 0) and
+                                       RaidTrackDB.lootHistory[#RaidTrackDB.lootHistory].id or 0
                     table.insert(RaidTrackDB.lootHistory, {
                         id = lastId + 1,
                         time = date("%H:%M:%S"),
@@ -324,7 +346,4 @@ end
 
     RaidTrack.AddDebugMessage("Combined UI updated for auctionID: " .. tostring(auctionID))
 end
-
-
-
 

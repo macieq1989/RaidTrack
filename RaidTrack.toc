@@ -58,3 +58,4 @@ UI/SettingsTab.lua
 UI/GuildTab.lua
 UI/AuctionLeaderUI.lua
 UI\AuctionParticipantUI.lua
+Core/AutoTrade.lua

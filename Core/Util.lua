@@ -172,4 +172,35 @@ function RaidTrack.IsLeader()
     return leaderName == playerName
 end
 
+function RaidTrack.IsPlayerInMyGuild(name)
+    for i = 1, GetNumGuildMembers() do
+        local fullName = GetGuildRosterInfo(i)
+        if fullName and strsplit("-", fullName) == name then
+            return true
+        end
+    end
+    return false
+end
 
+function RaidTrack.IsPlayerInMyRaid(name)
+    for i = 1, GetNumGroupMembers() do
+        local raidName = GetRaidRosterInfo(i)
+        if raidName and strsplit("-", raidName) == name then
+            return true
+        end
+    end
+    return false
+end
+
+
+function RaidTrack.FindItemInBags(itemID)
+    for bag = 0, NUM_BAG_SLOTS do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local id = C_Container.GetContainerItemID(bag, slot)
+            if id == itemID then
+                return bag, slot
+            end
+        end
+    end
+    return nil, nil
+end

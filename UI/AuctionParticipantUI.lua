@@ -102,7 +102,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
                local function CreateResponseButton(label, responseType, allButtonsTable)
     local btn = AceGUI:Create("Button")
     btn:SetText(label)
-    btn:SetWidth(80)
+    btn:SetWidth(64)
 
     btn:SetCallback("OnClick", function()
         -- ⛔ Zabezpieczenie: aukcja już się zakończyła
@@ -147,10 +147,13 @@ end
                 -- Dodanie przycisków wyboru odpowiedzi
                 local buttons = {}
 
-table.insert(buttons, CreateResponseButton("Main Spec", "MS", buttons))
-table.insert(buttons, CreateResponseButton("Off Spec", "OS", buttons))
-table.insert(buttons, CreateResponseButton("Transmog", "TMOG", buttons))
+table.insert(buttons, CreateResponseButton("BIS", "BIS", buttons))
+table.insert(buttons, CreateResponseButton("UP", "UP", buttons))
+table.insert(buttons, CreateResponseButton("Off", "OFF", buttons))
+table.insert(buttons, CreateResponseButton("Dis", "DIS", buttons))
+table.insert(buttons, CreateResponseButton("Tmog", "TMOG", buttons))
 table.insert(buttons, CreateResponseButton("Pass", "PASS", buttons))
+
 
 for _, btn in ipairs(buttons) do
     itemGroup:AddChild(btn)
