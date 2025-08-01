@@ -196,7 +196,10 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
             local ep, gp, pr = GetEPGP(response.from)
             local label = AceGUI:Create("Label")
             label:SetFullWidth(true)
-            label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
+            local _, class = UnitClass(response.from)
+local color = (RAID_CLASS_COLORS[class] or { r = 1, g = 1, b = 1 })
+local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, response.from)
+label:SetText(coloredName .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
             scrollContainer:AddChild(label)
         end
     end
