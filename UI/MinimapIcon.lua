@@ -9,7 +9,8 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
     OnClick = function(_, button)
         if button == "LeftButton" then
             if RaidTrack.ToggleMainFrame then
-                RaidTrack.ToggleMainFrame()
+                RaidTrack:ToggleMainWindow()
+
             end
         elseif button == "RightButton" then
             if RaidTrack.menu and RaidTrack.menu:IsShown() then
@@ -74,7 +75,8 @@ end
 
 
         CreateMenuButton("Open Window", function()
-            RaidTrack.ToggleMainFrame()
+            RaidTrack:ToggleMainWindow()
+
         end, -10)
 
         CreateMenuButton("Manual Sync", function()
