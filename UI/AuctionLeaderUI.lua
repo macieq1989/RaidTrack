@@ -156,22 +156,26 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
         frame = AceGUI:Create("Frame")
         frame:SetTitle("Auction Responses")
         frame:SetStatusText("Auction ID: " .. auctionID)
-        frame:SetLayout("List")
+        frame:SetLayout("Fill")
         frame:SetWidth(600)
         frame:SetHeight(500)
         frame:EnableResize(true)
         RaidTrack.auctionResponseWindows[auctionID] = frame
 
+        -- ⬅ przypięcie z lewej
         if RaidTrack.auctionWindow then
             local anchor = RaidTrack.auctionWindow.frame or RaidTrack.auctionWindow
             if anchor.SetPoint then
                 frame:SetPoint("TOPRIGHT", anchor.frame or anchor, "TOPLEFT", -10, 0)
-
             end
         end
     else
         frame:ReleaseChildren()
     end
+
+    local scrollContainer = AceGUI:Create("ScrollFrame")
+    scrollContainer:SetLayout("List")
+    frame:AddChild(scrollContainer)
 
     local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
     if not auctionData or not auctionData.items then
@@ -184,7 +188,7 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
         local header = AceGUI:Create("Heading")
         header:SetFullWidth(true)
         header:SetText(itemLink)
-        frame:AddChild(header)
+        scrollContainer:AddChild(header)
 
         RaidTrack.AddDebugMessage("Displaying responses for itemID: " .. tostring(item.itemID))
 
@@ -193,9 +197,10 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
             local label = AceGUI:Create("Label")
             label:SetFullWidth(true)
             label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
-            frame:AddChild(label)
+            scrollContainer:AddChild(label)
         end
     end
 
     RaidTrack.AddDebugMessage("Combined UI updated for auctionID: " .. tostring(auctionID))
 end
+
