@@ -222,10 +222,77 @@ for _, r in ipairs(sortedResponses) do
     local color = RAID_CLASS_COLORS[select(2, UnitClass(r.from)) or ""] or { r = 1, g = 1, b = 1 }
     local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, r.from)
 
-    local label = AceGUI:Create("Label")
-    label:SetFullWidth(true)
-    label:SetText(coloredName .. " - EP: " .. r.ep .. ", GP: " .. r.gp .. ", PR: " .. string.format("%.2f", r.pr) .. ", Response: " .. r.choice)
-    scrollContainer:AddChild(label)
+  local row = AceGUI:Create("SimpleGroup")
+row:SetFullWidth(true)
+row:SetLayout("Flow")
+
+local label = AceGUI:Create("Label")
+label:SetText(coloredName .. " - EP: " .. r.ep .. ", GP: " .. r.gp .. ", PR: " .. string.format("%.2f", r.pr) .. ", Response: " .. r.choice)
+label:SetRelativeWidth(0.7)
+row:AddChild(label)
+
+local assignBtn = AceGUI:Create("Button")
+
+-- Status: czy ten gracz ma już przypisany loot
+if item.assignedTo == r.from then
+    assignBtn:SetText("✔ Assigned")
+    assignBtn:SetDisabled(true)
+else
+    assignBtn:SetText("Assign")
+    assignBtn:SetCallback("OnClick", function()
+        local player = r.from
+        local itemID = item.itemID
+        local link = item.link or "item:" .. itemID
+        local gp = item.gp or 0
+
+        -- COFNIJ poprzedniego
+        if item.assignedTo then
+            local old = item.assignedTo
+            RaidTrack.AddDebugMessage("Reassigning " .. link .. " from " .. old .. " to " .. player)
+
+            -- cofnij z loot history
+            for i = #RaidTrackDB.lootHistory, 1, -1 do
+                local e = RaidTrackDB.lootHistory[i]
+                if e and e.player == old and e.item == link and e.boss == "Auction" then
+                    table.remove(RaidTrackDB.lootHistory, i)
+                    break
+                end
+            end
+
+            -- cofnij GP
+            RaidTrack.LogEPGPChange(old, 0, -gp, "Auction Revert")
+        else
+            RaidTrack.AddDebugMessage("Assigning " .. link .. " to " .. player .. " for " .. gp .. " GP")
+        end
+
+        -- Zapisz nowego
+        item.assignedTo = player
+
+        -- dodaj do historii
+        RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
+        local lastId = (#RaidTrackDB.lootHistory > 0) and RaidTrackDB.lootHistory[#RaidTrackDB.lootHistory].id or 0
+        table.insert(RaidTrackDB.lootHistory, {
+            id = lastId + 1,
+            time = date("%H:%M:%S"),
+            timestamp = time(),
+            player = player,
+            item = link,
+            boss = "Auction",
+            gp = gp
+        })
+
+        -- dodaj GP
+        RaidTrack.LogEPGPChange(player, 0, gp, "Auction")
+
+        -- odśwież
+        RaidTrack.UpdateLeaderAuctionUI(auctionID)
+    end)
+end
+
+assignBtn:SetRelativeWidth(0.3)
+row:AddChild(assignBtn)
+scrollContainer:AddChild(row)
+
 end
 
     end
