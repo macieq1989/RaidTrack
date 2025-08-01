@@ -17,7 +17,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
     local totalItems = #auctionData.items
     local auctionEndTime = auctionData.started + auctionData.duration
     local frame
-    local isWindowOpen = false  -- Flaga, aby upewnić się, że okno nie otworzy się ponownie
+    local isWindowOpen = false -- Flaga, aby upewnić się, że okno nie otworzy się ponownie
 
     -- Funkcja, która zaktualizuje dane przedmiotu
     local function UpdateItemData(item)
@@ -28,7 +28,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
         if itemLink then
             item.link = itemLink
         else
-            item.link = "ItemID: " .. tostring(item.itemID)  -- Jeśli nie ma linku, wyświetlamy tylko ID
+            item.link = "ItemID: " .. tostring(item.itemID) -- Jeśli nie ma linku, wyświetlamy tylko ID
         end
     end
 
@@ -64,7 +64,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
             RaidTrack.auctionParticipantWindow = frame
 
             -- Ustawiamy pozycję okna na prawą stronę ekranu
-            frame:SetPoint("RIGHT", UIParent, "RIGHT", -20, 0)  -- Ustawi okno po prawej stronie ekranu
+            frame:SetPoint("RIGHT", UIParent, "RIGHT", -20, 0) -- Ustawi okno po prawej stronie ekranu
 
             -- Tworzymy ScrollFrame, by dodać suwak
             local scroll = AceGUI:Create("ScrollFrame")
@@ -75,10 +75,10 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
 
             -- Liczymy ilość przedmiotów
             local itemCount = #updatedItems
-            local maxVisibleItems = 5  -- Limit widocznych przedmiotów
-            local itemHeight = 80      -- Wysokość pojedynczego przedmiotu (dostosuj do rzeczywistego rozmiaru)
+            local maxVisibleItems = 5 -- Limit widocznych przedmiotów
+            local itemHeight = 80 -- Wysokość pojedynczego przedmiotu (dostosuj do rzeczywistego rozmiaru)
             local scrollHeight = math.min(itemCount, maxVisibleItems) * itemHeight
-            frame:SetHeight(scrollHeight + 80)  -- +80 dla paddingu lub miejsca na przyciski
+            frame:SetHeight(scrollHeight + 80) -- +80 dla paddingu lub miejsca na przyciski
 
             -- Iteracja przez przedmioty w aukcji
             for i, item in ipairs(updatedItems) do
@@ -90,7 +90,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
                 itemGroup:SetLayout("Flow")
 
                 -- Wyświetl link przedmiotu
-                local title = item.link or ("ItemID: " .. tostring(item.itemID))  -- Wyświetlanie ItemID, jeśli nie mamy linku
+                local title = item.link or ("ItemID: " .. tostring(item.itemID)) -- Wyświetlanie ItemID, jeśli nie mamy linku
                 itemGroup:SetTitle(title)
 
                 local gpLabel = AceGUI:Create("Label")
@@ -99,50 +99,63 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
                 itemGroup:AddChild(gpLabel)
 
                 -- Funkcja do tworzenia przycisków odpowiedzi
-                local function CreateResponseButton(label, responseType)
-                    local btn = AceGUI:Create("Button")
-                    btn:SetText(label)
-                    btn:SetWidth(80)
-                    btn:SetCallback("OnClick", function()
-                        -- Sprawdzanie, czy gracz to lider aukcji
-                        local isLeader = UnitName("player") == auctionData.leader
-                        local ep, gp, pr = RaidTrack.GetEPGP(UnitName("player"))
+               local function CreateResponseButton(label, responseType, allButtonsTable)
+    local btn = AceGUI:Create("Button")
+    btn:SetText(label)
+    btn:SetWidth(80)
 
-                        -- Tworzymy tabelę z odpowiedzią
-                        local responseData = {
-                            player = UnitName("player"),
-                            response = responseType,
-                            ep = ep,
-                            gp = gp,
-                            pr = pr
-                        }
+    btn:SetCallback("OnClick", function()
+        -- ⛔ Zabezpieczenie: aukcja już się zakończyła
+        if time() > auctionEndTime then
+            RaidTrack.AddDebugMessage("Auction expired, response ignored.")
+            return
+        end
 
-                        -- Dodajemy odpowiedź do przedmiotu aukcji
-                        if not item.responses then
-                            item.responses = {} -- Inicjalizujemy odpowiedzi, jeśli jeszcze nie istnieją
-                        end
+        local isLeader = UnitName("player") == auctionData.leader
+        local ep, gp, pr = RaidTrack.GetEPGP(UnitName("player"))
 
-                        -- Zawsze dodajemy odpowiedź, nawet jeśli to lider
-                        item.responses[UnitName("player")] = responseData
+        local responseData = {
+            player = UnitName("player"),
+            response = responseType,
+            ep = ep,
+            gp = gp,
+            pr = pr
+        }
 
-                        -- Jeśli lider aukcji, nie wyłączamy przycisku
-                        if isLeader then
-                            btn:SetDisabled(false)
-                        else
-                            btn:SetDisabled(true)
-                        end
+        if not item.responses then
+            item.responses = {}
+        end
 
-                        -- Wysyłamy odpowiedź do lidera aukcji
-                        RaidTrack.SendAuctionResponseChunked(auctionData.auctionID, item.itemID, responseType)
-                    end)
-                    return btn
-                end
+        item.responses[UnitName("player")] = responseData
+
+        -- 🔁 Resetujemy wszystkie przyciski (z danej grupy) do aktywnych
+        for _, otherBtn in ipairs(allButtonsTable) do
+            otherBtn:SetDisabled(false)
+        end
+
+        -- 🔒 Dezaktywujemy tylko aktualny
+        btn:SetDisabled(true)
+
+        -- Wyślij odpowiedź
+        RaidTrack.SendAuctionResponseChunked(auctionData.auctionID, item.itemID, responseType)
+    end)
+
+    return btn
+end
+
 
                 -- Dodanie przycisków wyboru odpowiedzi
-                itemGroup:AddChild(CreateResponseButton("Main Spec", "MS"))
-                itemGroup:AddChild(CreateResponseButton("Off Spec", "OS"))
-                itemGroup:AddChild(CreateResponseButton("Transmog", "TMOG"))
-                itemGroup:AddChild(CreateResponseButton("Pass", "PASS"))
+                local buttons = {}
+
+table.insert(buttons, CreateResponseButton("Main Spec", "MS", buttons))
+table.insert(buttons, CreateResponseButton("Off Spec", "OS", buttons))
+table.insert(buttons, CreateResponseButton("Transmog", "TMOG", buttons))
+table.insert(buttons, CreateResponseButton("Pass", "PASS", buttons))
+
+for _, btn in ipairs(buttons) do
+    itemGroup:AddChild(btn)
+end
+
 
                 -- Dodanie przedmiotu do okna aukcji
                 scroll:AddChild(itemGroup)
@@ -154,7 +167,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
     for i, item in ipairs(auctionData.items) do
         -- Sprawdzamy, czy itemID jest poprawny i nie jest pusty
         if item.itemID and item.itemID ~= 0 then
-            RaidTrack.AddDebugMessage("Loading data for item ID: " .. tostring(item.itemID))  -- Debug: Loading data for each item
+            RaidTrack.AddDebugMessage("Loading data for item ID: " .. tostring(item.itemID)) -- Debug: Loading data for each item
 
             -- Używamy funkcji, aby załadować dane o przedmiocie
             UpdateItemData(item)
