@@ -144,95 +144,57 @@ function RaidTrack:OpenAuctionLeaderUI()
 end
 
 
-function RaidTrack.UpdateItemResponseInUI(auctionID, item)
-    RaidTrack.AddDebugMessage("Updating UI for auctionID " .. tostring(auctionID) .. " and itemID " .. tostring(item.itemID))
+function RaidTrack.UpdateLeaderAuctionUI(auctionID)
+    RaidTrack.AddDebugMessage("Updating combined leader auction UI for auctionID: " .. tostring(auctionID))
 
-    -- Sprawdzenie i utworzenie okna, jeśli nie istnieje
     if not RaidTrack.auctionResponseWindows then
         RaidTrack.auctionResponseWindows = {}
     end
 
     local frame = RaidTrack.auctionResponseWindows[auctionID]
     if not frame then
-        RaidTrack.AddDebugMessage("Creating new auction response window for auctionID " .. tostring(auctionID))
         frame = AceGUI:Create("Frame")
-        frame:SetTitle("Responses for Item: " .. (item.link or "Item " .. item.itemID))
+        frame:SetTitle("Auction Responses")
         frame:SetStatusText("Auction ID: " .. auctionID)
         frame:SetLayout("List")
-        frame:SetWidth(500)
-        frame:SetHeight(400)
+        frame:SetWidth(600)
+        frame:SetHeight(500)
         frame:EnableResize(true)
         RaidTrack.auctionResponseWindows[auctionID] = frame
+
+        if RaidTrack.auctionWindow then
+            local anchor = RaidTrack.auctionWindow.frame or RaidTrack.auctionWindow
+            if anchor.SetPoint then
+                frame:SetPoint("TOPLEFT", anchor.frame or anchor, "TOPRIGHT", 10, 0)
+            end
+        end
     else
-        frame:ReleaseChildren()  -- 🔁 Usuwa wszystkie dzieci, bezpiecznie
+        frame:ReleaseChildren()
     end
 
-    -- Nagłówek
-    local header = AceGUI:Create("Label")
-    header:SetFullWidth(true)
-    header:SetText("Responses for: " .. (item.link or "ItemID: " .. tostring(item.itemID)))
-    frame:AddChild(header)
-
-    -- Wyświetlenie ofert (zakładamy że to tablica `bids`)
-    RaidTrack.AddDebugMessage("Displaying bids for itemID " .. tostring(item.itemID))
-
-    for _, response in ipairs(item.bids or {}) do
-        local ep, gp, pr = GetEPGP(response.from)
-
-        local label = AceGUI:Create("Label")
-        label:SetFullWidth(true)
-        label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
-        frame:AddChild(label)
+    local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
+    if not auctionData or not auctionData.items then
+        RaidTrack.AddDebugMessage("No auction data found for auctionID: " .. tostring(auctionID))
+        return
     end
 
-    RaidTrack.AddDebugMessage("UI updated for itemID " .. tostring(item.itemID))
-end
+    for _, item in ipairs(auctionData.items) do
+        local itemLink = item.link or ("ItemID: " .. tostring(item.itemID))
+        local header = AceGUI:Create("Heading")
+        header:SetFullWidth(true)
+        header:SetText(itemLink)
+        frame:AddChild(header)
 
-function RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
-    RaidTrack.AddDebugMessage("Updating leader auction UI for auctionID: " .. tostring(auctionID))
+        RaidTrack.AddDebugMessage("Displaying responses for itemID: " .. tostring(item.itemID))
 
-    -- Sprawdzamy, czy okno odpowiedzi lidera już istnieje
-    if not RaidTrack.auctionResponseWindows then
-        RaidTrack.auctionResponseWindows = {}
+        for _, response in ipairs(item.bids or {}) do
+            local ep, gp, pr = GetEPGP(response.from)
+            local label = AceGUI:Create("Label")
+            label:SetFullWidth(true)
+            label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
+            frame:AddChild(label)
+        end
     end
 
-    -- Jeśli okno odpowiedzi lidera już istnieje, aktualizujemy je
-    local frame = RaidTrack.auctionResponseWindows[auctionID]
-    if not frame then
-        RaidTrack.AddDebugMessage("Creating new auction response window for auctionID " .. tostring(auctionID))
-
-        -- Tworzymy nowe okno odpowiedzi lidera
-        frame = AceGUI:Create("Frame")
-        frame:SetTitle("Responses for Item: " .. (item.link or "Item " .. item.itemID))
-        frame:SetStatusText("Auction ID: " .. auctionID)
-        frame:SetLayout("List")
-        frame:SetWidth(500)
-        frame:SetHeight(400)
-        frame:EnableResize(true)
-        RaidTrack.auctionResponseWindows[auctionID] = frame
-    else
-        -- Jeśli okno już istnieje, usuwamy dzieci i aktualizujemy je
-        frame:ReleaseChildren()  -- Bezpiecznie usuwamy wszystkie dzieci
-    end
-
-    -- Nagłówek
-    local header = AceGUI:Create("Label")
-    header:SetFullWidth(true)
-    header:SetText("Responses for: " .. (item.link or "ItemID: " .. tostring(item.itemID)))
-    frame:AddChild(header)
-
-    -- Wyświetlenie ofert (bids)
-    RaidTrack.AddDebugMessage("Displaying bids for itemID " .. tostring(item.itemID))
-
-    -- Dodajemy odpowiedzi lidera do okna
-    for _, response in ipairs(item.bids or {}) do
-        local ep, gp, pr = GetEPGP(response.from)
-
-        local label = AceGUI:Create("Label")
-        label:SetFullWidth(true)
-        label:SetText(response.from .. " - EP: " .. ep .. ", GP: " .. gp .. ", PR: " .. string.format("%.2f", pr) .. ", Response: " .. response.choice)
-        frame:AddChild(label)
-    end
-
-    RaidTrack.AddDebugMessage("UI updated for itemID " .. tostring(item.itemID))
+    RaidTrack.AddDebugMessage("Combined UI updated for auctionID: " .. tostring(auctionID))
 end

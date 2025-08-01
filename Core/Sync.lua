@@ -741,7 +741,8 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
                 RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
             end
 
-            RaidTrack.UpdateItemResponseInUI(auctionID, item)
+            RaidTrack.UpdateLeaderAuctionUI(auctionID)
+
             RaidTrack.DebugPrintResponses(item)
             RaidTrack.AddDebugMessage("Total bids for itemID " .. tostring(itemID) .. ": " .. tostring(#item.bids))
             break
