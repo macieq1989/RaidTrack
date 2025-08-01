@@ -13,6 +13,20 @@ RaidTrack.pendingSends = {}
 RaidTrack.chunkBuffer = {}
 RaidTrack.syncTimer = nil
 
+ if not C_ChatInfo.IsAddonMessagePrefixRegistered("auction") then
+    C_ChatInfo.RegisterAddonMessagePrefix("auction")
+end
+
+local auctionCommFrame = CreateFrame("Frame")
+auctionCommFrame:RegisterEvent("CHAT_MSG_ADDON")
+auctionCommFrame:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
+    if prefix == "auction" and message:find("^RTCHUNK") then
+        RaidTrack.AddDebugMessage("✅ sender from CHAT_MSG_ADDON: " .. tostring(sender))
+        RaidTrack.HandleChunkedAuctionPiece(sender, message)
+    end
+end)
+
+
 function RaidTrack.ScheduleSync()
     RaidTrack.AddDebugMessage("ScheduleSync() called")
     if RaidTrack.syncTimer then
@@ -516,6 +530,20 @@ function RaidTrack.QueueChunkedSend(target, prefix, data)
     end
 end
 
+function RaidTrack.QueueAuctionBroadcastSend(prefix, data)
+    local chunks = {}
+    local maxSize = 200
+
+    for i = 1, #data, maxSize do
+        table.insert(chunks, data:sub(i, i + maxSize - 1))
+    end
+
+    for i, chunk in ipairs(chunks) do
+        local marker = "RTCHUNK^" .. i .. "^" .. #chunks .. "^" .. chunk
+        C_ChatInfo.SendAddonMessage(prefix, marker, "RAID")
+    end
+end
+
 function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input)
     -- Debugowanie danych wejściowych
     if type(input) ~= "table" then
@@ -563,7 +591,8 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
     RaidTrack.AddDebugMessage("Serialized auction data: " .. tostring(serialized))
 
     -- Wywołanie funkcji wysyłania chunków
-    RaidTrack.QueueChunkedSend(target, "auction", serialized)
+    RaidTrack.QueueAuctionBroadcastSend("auction", serialized)
+
 end
 
 function RaidTrack.ReceiveAuctionChunked(sender, rawData)
@@ -573,33 +602,28 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     end
     RaidTrack.AddDebugMessage("Raw auction chunk from " .. sender .. ": " .. tostring(rawData))
 
-    -- 1. Deserializacja danych zewnętrznych
+    -- 1. Deserializacja danych
     local ok, data = RaidTrack.SafeDeserialize(rawData)
     if not ok then
         RaidTrack.AddDebugMessage("Failed to deserialize auction chunk!")
         return
     end
 
-    -- Logowanie typu danych
     RaidTrack.AddDebugMessage("ReceiveAuctionChunked: subtype=" .. tostring(data.subtype) .. ", auctionID=" .. tostring(data.auctionID))
 
-    -- 2. Sprawdzenie poprawności typu i subtype
     if data.type ~= "auction" then
         RaidTrack.AddDebugMessage("Invalid chunk type: " .. tostring(data.type))
         return
     end
 
-    -- Inicjalizacja i zabezpieczenie przed duplikatami
     RaidTrack.pendingAuctionItems = RaidTrack.pendingAuctionItems or {}
     RaidTrack.pendingAuctionItems[data.auctionID] = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
-    -- Obsługa subtype = item
     if data.subtype == "item" then
         local itemData = data.payload
         if itemData and itemData.itemID then
             RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(itemData.itemID))
 
-            -- Sprawdzamy, czy przedmiot już istnieje w aukcji
             local itemExists = false
             for _, item in ipairs(RaidTrack.pendingAuctionItems[data.auctionID]) do
                 if item.itemID == itemData.itemID then
@@ -608,7 +632,6 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
                 end
             end
 
-            -- Jeśli przedmiot nie istnieje, dodajemy go
             if not itemExists then
                 local uniqueItemID = tostring(itemData.itemID) .. "_" .. data.auctionID
 
@@ -618,11 +641,6 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
                     gp = itemData.gp,
                     responses = {}
                 })
-
-                -- Otwieramy okno lidera aukcji, jeśli jeszcze nie zostało otwarte
-                if not RaidTrack.auctionLeaderWindow then
-                    RaidTrack.OpenAuctionLeaderUI()
-                end
             else
                 RaidTrack.AddDebugMessage("Item with itemID=" .. tostring(itemData.itemID) .. " already exists, skipping.")
             end
@@ -630,60 +648,61 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
             RaidTrack.AddDebugMessage("Invalid auction item data!")
         end
 
-    -- Obsługa subtype = header
     elseif data.subtype == "header" then
         local headerData = data.payload
         if headerData then
             local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
-            -- Otwieramy okno uczestnika aukcji (dla lidera i innych uczestników)
-            RaidTrack.OpenAuctionParticipantUI({
-                auctionID = data.auctionID,
-                leader = headerData.leader,
-                started = headerData.started,
-                duration = headerData.duration,
-                items = items
-            })
+            -- 🧠 Tylko lider odpala okno lidera
+            if UnitIsUnit(headerData.leader, "player") then
+                RaidTrack:OpenAuctionLeaderUI()
+            end
 
-            -- Zamiast usuwać, przenieś do activeAuctions
+            -- Otwórz okno uczestnika aukcji
+         -- Sprawdzenie czy gracz jest w GILDII i w RAIDZIE
+if IsInRaid() and IsInGuild() then
+    RaidTrack.OpenAuctionParticipantUI({
+        auctionID = data.auctionID,
+        leader = headerData.leader,
+        started = headerData.started,
+        duration = headerData.duration,
+        items = items
+    })
+else
+    RaidTrack.AddDebugMessage("Blocked auction popup (not in raid or not in guild)")
+end
+
+
+            -- Przenieś do activeAuctions
             RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
             RaidTrack.activeAuctions[data.auctionID] = {
-                items = RaidTrack.pendingAuctionItems[data.auctionID],
+                items = items,
                 leader = headerData.leader,
                 started = headerData.started,
                 duration = headerData.duration
             }
-            RaidTrack.pendingAuctionItems[data.auctionID] = nil
 
+            RaidTrack.pendingAuctionItems[data.auctionID] = nil
         else
             RaidTrack.AddDebugMessage("Invalid auction header data!")
         end
 
-    -- Obsługa subtype = response
-    elseif data.subtype == "response" then
-        if data.payload then
-            -- Jeśli odpowiedź pochodzi od lidera, otwieramy okno odpowiedzi lidera
-            if data.payload.from == RaidTrack.activeAuctions[data.auctionID].leader then
-                RaidTrack.AddDebugMessage("Leader response detected. Opening leader's response window.")
-                RaidTrack.OpenAuctionLeaderResponseWindow(data.auctionID, data.payload)
-            else
-                RaidTrack.AddDebugMessage("Handling response for participant.")
-                RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
-            end
+elseif data.subtype == "response" then
+    if data.payload then
+        local auction = RaidTrack.activeAuctions[data.auctionID]
+        if auction and auction.leader and UnitIsUnit("player", auction.leader) then
+            RaidTrack.AddDebugMessage("I'm the leader, handling incoming response.")
+            RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
         else
-            RaidTrack.AddDebugMessage("Missing payload in auction response chunk!")
+            RaidTrack.AddDebugMessage("Not the leader or auction missing, skipping.")
         end
-
     else
-        RaidTrack.AddDebugMessage("Unknown auction subtype: " .. tostring(data.subtype))
+        RaidTrack.AddDebugMessage("Missing payload in auction response chunk!")
     end
+
+
 end
-
-
-
-
-
-
+end
 
 
 -- Funkcja do rejestrowania odpowiedzi
@@ -699,7 +718,7 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
         return
     end
 
-    auctionID = tostring(auctionID)  -- zawsze string, bo klucze w activeAuctions są stringami
+    auctionID = tostring(auctionID) -- zawsze string, bo klucze w activeAuctions są stringami
     RaidTrack.AddDebugMessage("Handling response for auctionID " .. auctionID)
 
     local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
@@ -716,11 +735,13 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
         local itemID = tonumber(item.itemID)
         local responseItemID = tonumber(responseData.itemID)
 
-        RaidTrack.AddDebugMessage("Checking itemID: " .. tostring(itemID) .. " against response itemID: " .. tostring(responseItemID))
+        RaidTrack.AddDebugMessage("Checking itemID: " .. tostring(itemID) .. " against response itemID: " ..
+                                      tostring(responseItemID))
 
         if itemID == responseItemID then
             matched = true
-            RaidTrack.AddDebugMessage("Matched itemID " .. tostring(itemID) .. " with response itemID " .. tostring(responseItemID))
+            RaidTrack.AddDebugMessage("Matched itemID " .. tostring(itemID) .. " with response itemID " ..
+                                          tostring(responseItemID))
 
             if not item.bids then
                 item.bids = {}
@@ -732,16 +753,20 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
                 if bid.from == responseData.from then
                     bid.choice = responseData.choice
                     responseExists = true
-                    RaidTrack.AddDebugMessage("Updated response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " for itemID " .. tostring(itemID))
+                    RaidTrack.AddDebugMessage(
+                        "Updated response from " .. tostring(responseData.from) .. " with choice " ..
+                            tostring(responseData.choice) .. " for itemID " .. tostring(itemID))
                     break
                 end
             end
 
             if not responseExists and responseData.choice ~= "PASS" then
                 table.insert(item.bids, responseData)
-                RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " .. tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
+                RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " ..
+                                              tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
             elseif responseData.choice == "PASS" then
-                RaidTrack.AddDebugMessage("Player " .. responseData.from .. " passed on itemID " .. tostring(itemID) .. ", not adding response.")
+                RaidTrack.AddDebugMessage("Player " .. responseData.from .. " passed on itemID " .. tostring(itemID) ..
+                                              ", not adding response.")
             end
 
             if responseData.from == auctionData.leader then
@@ -755,7 +780,8 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
             RaidTrack.AddDebugMessage("Total bids for itemID " .. tostring(itemID) .. ": " .. tostring(#item.bids))
             break
         else
-            RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " .. tostring(responseItemID))
+            RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " ..
+                                          tostring(responseItemID))
         end
     end
 
@@ -765,22 +791,27 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
         end
         RaidTrack.AddDebugMessage("Refreshed tabs after adding response")
     else
-        RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " .. tostring(responseData.itemID))
+        RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " ..
+                                      tostring(responseData.itemID))
     end
 end
 
 
 
 
-
-
-
-
-
-
-
-
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
+RaidTrack.AddDebugMessage("✅ sender from CHAT_MSG_ADDON: " .. tostring(sender))
+
+  if not sender or sender == "" then
+    sender = UnitName("player") -- nadawca lokalny
+end
+
+
+    RaidTrack.AddDebugMessage("Chunk received from: " .. tostring(sender))
+    RaidTrack.AddDebugMessage("UnitInRaid: " .. tostring(UnitInRaid(sender)))
+    RaidTrack.AddDebugMessage("InMyGuild: " ..
+                                  tostring(RaidTrack.IsPlayerInMyGuild and RaidTrack.IsPlayerInMyGuild(sender)))
+
     -- DEBUG: surowy chunk
     RaidTrack.AddDebugMessage("Raw auction chunk from: " .. msg)
 

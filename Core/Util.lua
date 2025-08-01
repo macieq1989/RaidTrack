@@ -172,4 +172,24 @@ function RaidTrack.IsLeader()
     return leaderName == playerName
 end
 
+function RaidTrack.IsPlayerInMyGuild(name)
+    for i = 1, GetNumGuildMembers() do
+        local fullName = GetGuildRosterInfo(i)
+        if fullName and strsplit("-", fullName) == name then
+            return true
+        end
+    end
+    return false
+end
+
+function RaidTrack.IsPlayerInMyRaid(name)
+    for i = 1, GetNumGroupMembers() do
+        local raidName = GetRaidRosterInfo(i)
+        if raidName and strsplit("-", raidName) == name then
+            return true
+        end
+    end
+    return false
+end
+
 
