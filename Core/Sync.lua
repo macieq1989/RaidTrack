@@ -86,6 +86,14 @@ function RaidTrack.RequestSyncFromGuild()
     end
 end
 
+function RaidTrack.SendSyncData()
+    if RaidTrack.HandleSendSync then
+        RaidTrack.HandleSendSync()
+    else
+        RaidTrack.AddDebugMessage("SendSyncData: Sync system not initialized")
+    end
+end
+
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
     local sendFull = (knownEP == 0 and knownLoot == 0)
