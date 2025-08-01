@@ -109,6 +109,10 @@ function RaidTrack.SendSyncData()
 end
 
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
+       if not RaidTrack.IsPlayerInMyGuild(name) then
+        RaidTrack.AddDebugMessage("Blocked sync to non-guild member: " .. tostring(name))
+        return
+    end
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
     local sendFull = (knownEP == 0 and knownLoot == 0)
     local payload, maxEP, maxLoot
