@@ -165,7 +165,8 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
         if RaidTrack.auctionWindow then
             local anchor = RaidTrack.auctionWindow.frame or RaidTrack.auctionWindow
             if anchor.SetPoint then
-                frame:SetPoint("TOPLEFT", anchor.frame or anchor, "TOPRIGHT", 10, 0)
+                frame:SetPoint("TOPRIGHT", anchor.frame or anchor, "TOPLEFT", -10, 0)
+
             end
         end
     else
