@@ -193,3 +193,14 @@ function RaidTrack.IsPlayerInMyRaid(name)
 end
 
 
+function RaidTrack.FindItemInBags(itemID)
+    for bag = 0, NUM_BAG_SLOTS do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local id = C_Container.GetContainerItemID(bag, slot)
+            if id == itemID then
+                return bag, slot
+            end
+        end
+    end
+    return nil, nil
+end

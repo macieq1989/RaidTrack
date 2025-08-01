@@ -201,20 +201,19 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
 
         local sortedResponses = {}
         for _, response in ipairs(item.bids or {}) do
-    if response.choice ~= "PASS" then
-        local ep, gp, pr = GetEPGP(response.from)
-        table.insert(sortedResponses, {
-            from = response.from,
-            choice = response.choice,
-            ep = ep,
-            gp = gp,
-            pr = pr
-        })
-    else
-        RaidTrack.AddDebugMessage("Skipping response from " .. response.from .. " (PASS)")
-    end
-end
-
+            if response.choice ~= "PASS" then
+                local ep, gp, pr = GetEPGP(response.from)
+                table.insert(sortedResponses, {
+                    from = response.from,
+                    choice = response.choice,
+                    ep = ep,
+                    gp = gp,
+                    pr = pr
+                })
+            else
+                RaidTrack.AddDebugMessage("Skipping response from " .. response.from .. " (PASS)")
+            end
+        end
 
         local priorityOrder = {
             BIS = 1,
@@ -293,7 +292,7 @@ end
             end
 
             if item.assignedTo == r.from then
-                assignBtn:SetText("✔")
+                assignBtn:SetText("Assigned")
                 assignBtn:SetDisabled(true)
             else
                 assignBtn:SetText("Assign")
@@ -319,6 +318,8 @@ end
                     end
 
                     item.assignedTo = player
+                    item.awaitingTrade = true
+                    item.delivered = false
 
                     RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
                     local lastId = (#RaidTrackDB.lootHistory > 0) and
