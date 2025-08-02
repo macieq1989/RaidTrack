@@ -222,3 +222,12 @@ function RaidTrack.ApplyHighlight(row, isSelected)
         row._highlightTexture:Hide()
     end
 end
+function RaidTrack.GetClassTokenFromLocalized(classLocalized)
+    for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do
+        if localized == classLocalized then return token end
+    end
+    for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do
+        if localized == classLocalized then return token end
+    end
+    return classLocalized
+end

@@ -6,8 +6,9 @@ local epgpTabData = {
     filter = "",
     currentData = {},
     epgpScrollContainer = nil,
+    rowPoolSize = 75
 }
-
+local searchDebounceTimer = nil
 local CLASS_ICON_TCOORDS = {
     WARRIOR = {0, 0.25, 0, 0.25},
     MAGE = {0.25, 0.49609375, 0, 0.25},
@@ -21,7 +22,7 @@ local CLASS_ICON_TCOORDS = {
     DEATHKNIGHT = {0.25, 0.49609375, 0.5, 0.75},
     MONK = {0.49609375, 0.7421875, 0.5, 0.75},
     DEMONHUNTER = {0.7421875, 0.98828125, 0.5, 0.75},
-    EVOKER = {0, 0.25, 0.75, 1},
+    EVOKER = {0, 0.25, 0.75, 1}
 }
 
 local function GetClassIconTextureCoords(class)
@@ -37,14 +38,31 @@ local function BuildEPGPData()
         local gp = stats.gp or 0
         local pr = (gp > 0) and (ep / gp) or 0
 
-        if filter == "" or playerName:lower():find(filter, 1, true) then
-            local _, classToken = UnitClass(playerName)
+        -- PRÓBA POBRANIA KLASY
+        local classToken
+        local fullName = playerName
+        if not UnitExists(playerName) then
+            -- fallback na obecne API guildowe
+            for i = 1, GetNumGuildMembers() do
+                local name, _, _, _, classLocalized = GetGuildRosterInfo(i)
+                if name and Ambiguate(name, "none") == playerName then
+                    classToken = RaidTrack.GetClassTokenFromLocalized(classLocalized)
+                    break
+                end
+            end
+        end
+        classToken = classToken or select(2, UnitClass(playerName)) or "PRIEST"
+
+        local lowerName = playerName:lower()
+        local lowerClass = classToken:lower()
+
+        if filter == "" or lowerName:find(filter, 1, true) or lowerClass:find(filter, 1, true) then
             table.insert(data, {
                 name = playerName,
                 ep = ep,
                 gp = gp,
                 pr = pr,
-                class = classToken or "PRIEST",
+                class = classToken,
             })
         end
     end
@@ -53,8 +71,11 @@ local function BuildEPGPData()
     epgpTabData.currentData = data
 end
 
+
 local function BuildEPGPUI(scrollContainer)
-    if not scrollContainer then return end
+    if not scrollContainer then
+        return
+    end
     scrollContainer:ReleaseChildren()
 
     -- Header row
@@ -101,7 +122,12 @@ local function BuildEPGPUI(scrollContainer)
     scrollContainer:AddChild(header)
 
     -- Data rows
-    for _, d in ipairs(epgpTabData.currentData) do
+    local data = epgpTabData.currentData
+    local maxRows = math.min(epgpTabData.rowPoolSize, #data)
+
+    for i = 1, maxRows do
+        local d = data[i]
+
         local row = AceGUI:Create("SimpleGroup")
         row:SetLayout("Flow")
         row:SetFullWidth(true)
@@ -117,11 +143,11 @@ local function BuildEPGPUI(scrollContainer)
         icon.image:SetTexCoord(GetClassIconTextureCoords(d.class))
         row:AddChild(icon)
 
-        -- Player name with class color
+        -- Player name
         local nameLabel = AceGUI:Create("Label")
-        local _, class = UnitClass(d.name)
-        local color = RAID_CLASS_COLORS[class or ""] or { r = 1, g = 1, b = 1 }
-        local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r*255, color.g*255, color.b*255, d.name)
+        local color = RAID_CLASS_COLORS[d.class or ""] or { r = 1, g = 1, b = 1 }
+
+        local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, d.name)
         nameLabel:SetText(coloredName)
         nameLabel:SetFontObject(GameFontNormal)
         nameLabel:SetWidth(180)
@@ -154,48 +180,90 @@ local function BuildEPGPUI(scrollContainer)
 
         scrollContainer:AddChild(row)
     end
+
+    -- 💥 TU DODAJ ten blok:
+    if epgpTabData.rowPoolSize < #data then
+        local loadMoreBtn = AceGUI:Create("Button")
+        loadMoreBtn:SetText("Load More")
+        loadMoreBtn:SetFullWidth(true)
+        loadMoreBtn:SetCallback("OnClick", function()
+            epgpTabData.rowPoolSize = epgpTabData.rowPoolSize + 75
+            RaidTrack.UpdateEPGPList()
+        end)
+        scrollContainer:AddChild(loadMoreBtn)
+    end
+    if epgpTabData.countLabel then
+    local shown = math.min(#epgpTabData.currentData, epgpTabData.rowPoolSize or 0)
+    epgpTabData.countLabel:SetText("Displaying: " .. shown .. " / " .. #epgpTabData.currentData)
+end
+
+
 end
 
 local function UpdateEPGPList()
+    epgpTabData.rowPoolSize = 75 -- reset przy każdej aktualizacji (opcjonalnie)
     BuildEPGPData()
     BuildEPGPUI(epgpTabData.epgpScrollContainer)
 end
 
 function RaidTrack:Render_epgpTab(container)
     container:SetLayout("Fill")
-    container:SetFullHeight(true)
 
     local mainGroup = AceGUI:Create("SimpleGroup")
     mainGroup:SetFullWidth(true)
     mainGroup:SetFullHeight(true)
-    mainGroup:SetLayout("List")
+    mainGroup:SetLayout("Flow")
     container:AddChild(mainGroup)
 
+    -- Lewy panel z listą
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetLayout("List")
+    scroll:SetRelativeWidth(0.68)
+    scroll:SetFullHeight(true)
+    mainGroup:AddChild(scroll)
+    epgpTabData.epgpScrollContainer = scroll
+
+    -- Prawy panel z filtrami
+    local rightPanel = AceGUI:Create("InlineGroup")
+    rightPanel:SetTitle("Controls")
+    rightPanel:SetRelativeWidth(0.32)
+    rightPanel:SetFullHeight(true)
+    rightPanel:SetLayout("Flow")
+    mainGroup:AddChild(rightPanel)
+
+    -- Search
     local searchBox = AceGUI:Create("EditBox")
     searchBox:SetLabel("Search Player")
     searchBox:SetFullWidth(true)
     searchBox:SetText(epgpTabData.filter or "")
-    mainGroup:AddChild(searchBox)
+    rightPanel:AddChild(searchBox)
 
-    local outerGroup = AceGUI:Create("SimpleGroup")
-    outerGroup:SetFullWidth(true)
-    outerGroup:SetFullHeight(true)
-    outerGroup:SetLayout("Fill")
-    mainGroup:AddChild(outerGroup)
+   -- Label zliczający — dodaj NA STAŁE do rightPanel (raz!)
+local countLabel = AceGUI:Create("Label")
+countLabel:SetText("")
+countLabel:SetFullWidth(true)
+rightPanel:AddChild(countLabel)
+epgpTabData.countLabel = countLabel
 
-    local scrollContainer = AceGUI:Create("ScrollFrame")
-    scrollContainer:SetLayout("List")
-    scrollContainer:SetFullWidth(true)
-    scrollContainer:SetFullHeight(true)
-    outerGroup:AddChild(scrollContainer)
+-- Callback wyszukiwarki
+searchBox:SetCallback("OnTextChanged", function(_, _, text)
+    epgpTabData.filter = text or ""
+    epgpTabData.rowPoolSize = 75
 
-    epgpTabData.epgpScrollContainer = scrollContainer
+    if searchDebounceTimer then
+        searchDebounceTimer:Cancel()
+    end
 
-    searchBox:SetCallback("OnTextChanged", function(_, _, text)
-        epgpTabData.filter = text or ""
-        UpdateEPGPList()
+    searchDebounceTimer = C_Timer.NewTimer(0.3, function()
+        RaidTrack.UpdateEPGPList()
     end)
+end)
 
-    UpdateEPGPList()
+
+
+
+    -- Wywołanie UI z listą
+    RaidTrack.UpdateEPGPList()
 end
+
 RaidTrack.UpdateEPGPList = UpdateEPGPList

@@ -15,6 +15,7 @@ guildTabData = guildTabData or {
     visibleRows = {},
     rowPoolSize = 75
 }
+local guildSearchDebounceTimer = nil
 
 local CLASS_ICON_TCOORDS = CLASS_ICON_TCOORDS or {
     WARRIOR = {0, 0.25, 0, 0.25},
@@ -32,15 +33,7 @@ local CLASS_ICON_TCOORDS = CLASS_ICON_TCOORDS or {
     EVOKER = {0, 0.25, 0.75, 1}
 }
 
-local function GetClassTokenFromLocalized(classLocalized)
-    for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do
-        if localized == classLocalized then return token end
-    end
-    for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do
-        if localized == classLocalized then return token end
-    end
-    return classLocalized
-end
+
 
 local function GetClassIconTextureCoords(class)
     return unpack(CLASS_ICON_TCOORDS[class] or {0, 1, 0, 1})
@@ -80,7 +73,7 @@ function RaidTrack.UpdateGuildRoster()
         local name, _, _, _, classLocalized, _, _, _, online = GetGuildRosterInfo(i)
         if name and classLocalized then
             local shortName = Ambiguate(name, "none")
-            local classToken = GetClassTokenFromLocalized(classLocalized)
+            local classToken = RaidTrack.GetClassTokenFromLocalized(classLocalized)
             local epgp = RaidTrackDB.epgp[shortName] or { ep = 0, gp = 0 }
             local lowerName = shortName:lower()
             local lowerClass = classToken:lower()
@@ -294,10 +287,18 @@ function RaidTrack:Render_guildTab(container)
     searchBox:SetLabel("Search")
     searchBox:SetText(guildTabData.filter)
     searchBox:SetCallback("OnTextChanged", function(_, _, text)
-        guildTabData.filter = text:lower()
-        guildTabData.forceRefresh = true
+    guildTabData.filter = text:lower()
+    guildTabData.forceRefresh = true
+
+    if guildSearchDebounceTimer then
+        guildSearchDebounceTimer:Cancel()
+    end
+
+    guildSearchDebounceTimer = C_Timer.NewTimer(0.3, function()
         RaidTrack.UpdateGuildRoster()
     end)
+end)
+
     rightPanel:AddChild(searchBox)
 
     local epInput = AceGUI:Create("EditBox")
