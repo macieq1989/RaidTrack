@@ -12,13 +12,22 @@ function RaidTrack:CreateMainFrame()
     frame:EnableResize(false)
     self.mainFrame = frame
 
-    local tabs = {
-        { text = "Raid", value = "raidTab" },
-        { text = "EPGP", value = "epgpTab" },
-        { text = "Loot", value = "lootTab" },
-        { text = "Guild", value = "guildTab" },
-        { text = "Settings", value = "settingsTab" },
-    }
+    local tabs = {{
+        text = "Raid",
+        value = "raidTab"
+    }, {
+        text = "EPGP",
+        value = "epgpTab"
+    }, {
+        text = "Loot",
+        value = "lootTab"
+    }, {
+        text = "Guild",
+        value = "guildTab"
+    }, {
+        text = "Settings",
+        value = "settingsTab"
+    }}
 
     local tabGroup = AceGUI:Create("TabGroup")
     tabGroup:SetTabs(tabs)
@@ -26,7 +35,9 @@ function RaidTrack:CreateMainFrame()
     tabGroup:SetFullHeight(true)
     tabGroup:SetLayout("Fill")
 
-tabGroup:SetCallback("OnGroupSelected", function(container, event, tabKey)
+    tabGroup:SetCallback("OnGroupSelected", function(container, event, tabKey)
+    RaidTrack.activeTab = tabKey
+
     if tabKey ~= "raidTab" and RaidTrack.DeactivateRaidTab then
         RaidTrack.DeactivateRaidTab()
         RaidTrack.ClearRaidSelection()
@@ -48,7 +59,23 @@ end)
     refreshBtn:SetText("Refresh")
     refreshBtn:SetPoint("TOPRIGHT", frame.frame, "TOPRIGHT", -40, -30)
     refreshBtn:SetScript("OnClick", function()
-        RaidTrack.UpdateRaidList()
+        local activeTab = RaidTrack.activeTab or ""
+if activeTab == "raidTab" and RaidTrack.UpdateRaidList then
+    RaidTrack.UpdateRaidList()
+elseif activeTab == "epgpTab" and RaidTrack.UpdateEPGPList then
+    RaidTrack.UpdateEPGPList()
+elseif activeTab == "lootTab" and RaidTrack.UpdateLootList then
+    RaidTrack.UpdateLootList()
+elseif activeTab == "guildTab" and RaidTrack.UpdateGuildList then
+    RaidTrack.UpdateGuildList()
+
+elseif activeTab == "settingsTab" then
+    -- np. Settings tab nie potrzebuje refresh
+else
+    RaidTrack.AddDebugMessage("Refresh: no known updater for tab: " .. tostring(activeTab))
+end
+
+
     end)
 end
 

@@ -198,3 +198,4 @@ function RaidTrack:Render_epgpTab(container)
 
     UpdateEPGPList()
 end
+RaidTrack.UpdateEPGPList = UpdateEPGPList

@@ -187,10 +187,9 @@ function RaidTrack:Render_lootTab(container)
     -- Loot history update function
     function UpdateLootHistory()
         -- Clear old rows
-        for _, row in ipairs(historyRows) do
-            row:Hide()
-        end
-        historyRows = {}
+       scroll:ReleaseChildren()
+historyRows = {}
+
 
         local data = RaidTrackDB.lootHistory or {}
         local maxEntries = 50
@@ -217,6 +216,8 @@ function RaidTrack:Render_lootTab(container)
             table.insert(historyRows, row)
         end
     end
+
+    RaidTrack.UpdateLootList = UpdateLootHistory
 
     -- Event to catch chat loot links for auto-paste
     local chatFrameListener = CreateFrame("Frame")
@@ -249,3 +250,4 @@ function RaidTrack:Render_lootTab(container)
     UpdateBossDropdown()
     UpdateLootHistory()
 end
+

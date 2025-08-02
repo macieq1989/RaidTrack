@@ -383,3 +383,4 @@ function RaidTrack:Render_raidTab(container)
 
     UpdateRaidList()
 end
+RaidTrack.UpdateRaidList = UpdateRaidList

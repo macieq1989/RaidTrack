@@ -135,13 +135,16 @@ guildTabData.visibleRows = {}
     header:SetLayout("Flow")
     header:SetFullWidth(true)
     header:SetHeight(24)
-    for _, h in ipairs({{"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}}) do
-        local lbl = AceGUI:Create("Label")
-        lbl:SetText(h[1])
-        lbl:SetWidth(h[2])
-        lbl:SetJustifyH("CENTER")
-        header:AddChild(lbl)
-    end
+    for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}}) do
+
+    local lbl = AceGUI:Create("Label")
+    lbl:SetText(h[1])
+    lbl:SetWidth(h[2])
+    lbl:SetJustifyH("CENTER")
+    lbl:SetFontObject(GameFontNormal)
+    header:AddChild(lbl)
+end
+
     guildTabData.scrollFrame:AddChild(header)
 
     for i = 1, math.min(guildTabData.rowPoolSize, #guildTabData.currentData) do
@@ -192,13 +195,15 @@ RaidTrack.ApplyHighlight(row, IsSelected(d.name))
             width = 60
         }}
         for _, field in ipairs(fields) do
-            local lbl = AceGUI:Create("Label")
-            lbl:SetText(tostring(field.text))
-            lbl:SetWidth(field.width)
-            lbl:SetJustifyH("CENTER")
-            lbl:SetColor(col.r, col.g, col.b)
-            row:AddChild(lbl)
-        end
+    local lbl = AceGUI:Create("Label")
+    lbl:SetText(tostring(field.text))
+    lbl:SetWidth(field.width)
+    lbl:SetJustifyH("CENTER")
+    lbl:SetFontObject(GameFontNormal)
+    lbl:SetColor(col.r, col.g, col.b)
+    row:AddChild(lbl)
+end
+
 
         row.frame:SetScript("OnMouseDown", function()
             local idx = i
@@ -319,5 +324,11 @@ function RaidTrack:Render_guildTab(container)
     rightPanel:AddChild(applyBtn)
 
     RaidTrack.UpdateGuildRoster()
+    
 
+end
+RaidTrack.UpdateGuildList = function()
+    if RaidTrack.UpdateGuildRoster then
+        RaidTrack.UpdateGuildRoster()
+    end
 end
