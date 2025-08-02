@@ -9,7 +9,8 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
     OnClick = function(_, button)
         if button == "LeftButton" then
             if RaidTrack.ToggleMainFrame then
-                RaidTrack.ToggleMainFrame()
+                RaidTrack:ToggleMainWindow()
+
             end
         elseif button == "RightButton" then
             if RaidTrack.menu and RaidTrack.menu:IsShown() then
@@ -34,7 +35,8 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
 function RaidTrack.ShowContextMenu()
     if not RaidTrack.menu then
         local menu = CreateFrame("Frame", "RaidTrackMinimapMenu", UIParent, "BackdropTemplate")
-        menu:SetSize(140, 100)
+        menu:SetSize(140, 120)
+
         menu:SetBackdrop({
             bgFile = "Interface/Tooltips/UI-Tooltip-Background",
             edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
@@ -74,7 +76,8 @@ end
 
 
         CreateMenuButton("Open Window", function()
-            RaidTrack.ToggleMainFrame()
+            RaidTrack:ToggleMainWindow()
+
         end, -10)
 
         CreateMenuButton("Manual Sync", function()

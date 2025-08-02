@@ -1,278 +1,335 @@
--- GuildTab.lua
+-- GuildTab.lua (AceGUI version, cache-only model with manual "Load More" pagination)
 local addonName, RaidTrack = ...
+local AceGUI = LibStub("AceGUI-3.0")
 
--- Ensure core structures exist
-RaidTrack.tabs            = RaidTrack.tabs            or {}
-RaidTrack.tabFrames       = RaidTrack.tabFrames       or {}
-RaidTrack.selectedGuild   = RaidTrack.selectedGuild   or {}
-RaidTrack.lastSelectedIdx = RaidTrack.lastSelectedIdx or nil
-if not RaidTrack.mainFrame then return end
+-- Lokalny stan
+guildTabData = guildTabData or {
+    selected = {},
+    filter = "",
+    currentData = {},
+    lastSelectedIdx = nil,
+    scrollFrame = nil,
+    showOffline = false,
+    forceRefresh = true,
+    countLabel = nil,
+    visibleRows = {},
+    rowPoolSize = 75
+}
+local guildSearchDebounceTimer = nil
 
-local GUILD_TAB_INDEX = 5
+local CLASS_ICON_TCOORDS = CLASS_ICON_TCOORDS or {
+    WARRIOR = {0, 0.25, 0, 0.25},
+    MAGE = {0.25, 0.49609375, 0, 0.25},
+    ROGUE = {0.49609375, 0.7421875, 0, 0.25},
+    DRUID = {0.7421875, 0.98828125, 0, 0.25},
+    HUNTER = {0, 0.25, 0.25, 0.5},
+    SHAMAN = {0.25, 0.49609375, 0.25, 0.5},
+    PRIEST = {0.49609375, 0.7421875, 0.25, 0.5},
+    WARLOCK = {0.7421875, 0.98828125, 0.25, 0.5},
+    PALADIN = {0, 0.25, 0.5, 0.75},
+    DEATHKNIGHT = {0.25, 0.49609375, 0.5, 0.75},
+    MONK = {0.49609375, 0.7421875, 0.5, 0.75},
+    DEMONHUNTER = {0.7421875, 0.98828125, 0.5, 0.75},
+    EVOKER = {0, 0.25, 0.75, 1}
+}
 
--- Create or retrieve the Guild tab frame
-local frame = RaidTrack.tabFrames[GUILD_TAB_INDEX]
-if not frame then
-    frame = CreateFrame("Frame", nil, RaidTrack.mainFrame)
-    frame:SetSize(960, 700)
-    frame:SetPoint("TOPLEFT", RaidTrack.mainFrame, "TOPLEFT", 20, -60)
-    frame:Hide()
-    RaidTrack.tabFrames[GUILD_TAB_INDEX] = frame
+
+
+local function GetClassIconTextureCoords(class)
+    return unpack(CLASS_ICON_TCOORDS[class] or {0, 1, 0, 1})
 end
-RaidTrack.guildTab = frame
 
--- Create Guild tab button
-local btn = RaidTrack.tabs[GUILD_TAB_INDEX]
-if not btn then
-    btn = CreateFrame("Button", nil, RaidTrack.mainFrame, "UIPanelButtonTemplate")
-    btn:SetSize(80, 25)
-    btn:SetText("Guild")
-    btn:SetPoint("TOPLEFT", RaidTrack.mainFrame, "TOPLEFT", 10 + (GUILD_TAB_INDEX-1)*85, -30)
-    btn:SetScript("OnClick", function() RaidTrack.ShowTab(GUILD_TAB_INDEX) end)
-    RaidTrack.tabs[GUILD_TAB_INDEX] = btn
+local function ClearSelection()
+    guildTabData.selected = {}
 end
 
--- Controls: Show Offline and Search
-local showOffline = false
-local searchText  = ""
+local function IsSelected(name)
+    return guildTabData.selected[name]
+end
 
--- Selection helpers
-local function ClearSelection() RaidTrack.selectedGuild = {} end
-local function IsSelected(name) return RaidTrack.selectedGuild[name] end
 local function SetSelectedRange(data, fromIdx, toIdx)
     local s, e = math.min(fromIdx, toIdx), math.max(fromIdx, toIdx)
-    for i = s, e do RaidTrack.selectedGuild[data[i].name] = true end
+    for i = s, e do
+        guildTabData.selected[data[i].name] = true
+    end
 end
 
--- Show Offline checkbox
-local offlineCheckbox = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-offlineCheckbox:SetPoint("TOPLEFT", 10, -10)
-offlineCheckbox.text:SetText("Show Offline")
-offlineCheckbox:SetScript("OnClick", function(self)
-    showOffline = self:GetChecked()
-    RaidTrack.UpdateGuildRoster()
-end)
-
--- Search box
-local searchBox do
-    local lbl = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lbl:SetPoint("TOPLEFT", offlineCheckbox, "BOTTOMLEFT", 0, -10)
-    lbl:SetText("Search:")
-    searchBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
-    searchBox:SetSize(200, 20)
-    searchBox:SetPoint("TOPLEFT", lbl, "BOTTOMLEFT", 0, -2)
-    searchBox:SetAutoFocus(false)
-    searchBox:SetScript("OnEnterPressed", function(self)
-        searchText = self:GetText():lower()
-        RaidTrack.UpdateGuildRoster()
-        self:ClearFocus()
-    end)
-end
-
--- Scroll frame
-local scroll = CreateFrame("ScrollFrame", "RaidTrackGuildScroll", frame, "UIPanelScrollFrameTemplate")
-scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -100)
-scroll:SetSize(450, 600)
-local content = CreateFrame("Frame", nil, scroll)
-content:SetSize(450, 600)
-scroll:SetScrollChild(content)
-
--- Right-side operations panel
-local opsPanel = CreateFrame("Frame", nil, frame)
-opsPanel:SetSize(240, 600)
-opsPanel:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 20, 0)
-
--- Selected count label
-local countLabel = opsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-countLabel:SetPoint("TOPLEFT", opsPanel, "TOPLEFT", 10, -20)
-countLabel:SetText("Selected: 0")
-
--- EP input
-local epLabel = opsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-epLabel:SetPoint("TOPLEFT", countLabel, "BOTTOMLEFT", 0, -30)
-epLabel:SetText("EP:")
-local epInput = CreateFrame("EditBox", nil, opsPanel, "InputBoxTemplate")
-epInput:SetSize(100, 20)
-epInput:SetPoint("LEFT", epLabel, "RIGHT", 10, 0)
-epInput:SetAutoFocus(false)
-
--- GP input
-local gpLabel = opsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-gpLabel:SetPoint("TOPLEFT", epLabel, "BOTTOMLEFT", 0, -30)
-gpLabel:SetText("GP:")
-local gpInput = CreateFrame("EditBox", nil, opsPanel, "InputBoxTemplate")
-gpInput:SetSize(100, 20)
-gpInput:SetPoint("LEFT", gpLabel, "RIGHT", 10, 0)
-gpInput:SetAutoFocus(false)
-
--- Apply button with auto-sync
-local applyBtn = CreateFrame("Button", nil, opsPanel, "UIPanelButtonTemplate")
-applyBtn:SetSize(100, 25)
-applyBtn:SetPoint("TOPLEFT", gpLabel, "BOTTOMLEFT", 0, -30)
-applyBtn:SetText("Apply")
-applyBtn:SetScript("OnClick", function()
-    local epVal = tonumber(epInput:GetText()) or 0
-    local gpVal = tonumber(gpInput:GetText()) or 0
-    for _, d in ipairs(RaidTrack.currentGuildData or {}) do
-        if RaidTrack.selectedGuild[d.name] then
-            RaidTrack.LogEPGPChange(d.name, epVal, gpVal, "GuildTab Apply")
+local function UpdateHighlighting()
+    for idx, row in ipairs(guildTabData.visibleRows or {}) do
+        local data = guildTabData.currentData[idx]
+        if row.bg and data then
+            row.bg:SetShown(IsSelected(data.name))
         end
     end
-    RaidTrack.UpdateGuildRoster()
-    RaidTrack.AddDebugMessage("Auto-sync: sending updated data...")
-    RaidTrack.SendSyncData()
-end)
-
--- Background grid
-local gridBg = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-gridBg:SetPoint("TOPLEFT", scroll, "TOPLEFT", -5, 5)
-gridBg:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", 5, -5)
-gridBg:SetFrameLevel(scroll:GetFrameLevel() - 1)
-gridBg:SetBackdrop({
-    bgFile   = "Interface\\ChatFrame\\ChatFrameBackground",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 8,
-    insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-gridBg:SetBackdropColor(0, 0, 0, 0.8)
-gridBg:SetBackdropBorderColor(0, 0, 0, 0.6)
-
--- UI row storage and ClearUI
-local uiRows = {}
-local function ClearUI()
-    for _, row in ipairs(uiRows) do
-        for _, widget in pairs(row) do
-            if type(widget) == "table" and widget.Hide then
-                widget:Hide()
-            end
-        end
-    end
-    wipe(uiRows)
-    local count = 0 for _ in pairs(RaidTrack.selectedGuild) do count = count + 1 end
-    countLabel:SetText("Selected: " .. count)
-    -- also clear all children from content frame to avoid leftovers
-    for _, child in ipairs({ content:GetChildren() }) do
-        if child.Hide then child:Hide() end
-    end
 end
 
--- Sorting helper
-local function SortByPR(a, b) return a.pr > b.pr end
-
--- Column offsets
-local COL = { name = 30, ep = 200, gp = 280, pr = 360 }
-local COL_WIDTH = 60
-
--- Main update function
 function RaidTrack.UpdateGuildRoster()
-    ClearUI()
-    if C_GuildInfo and C_GuildInfo.RequestGuildRoster then
-        C_GuildInfo.RequestGuildRoster()
-    elseif GuildRoster then
-        GuildRoster()
-    end
-
-    local total = (C_GuildInfo and C_GuildInfo.GetNumGuildMembers and C_GuildInfo.GetNumGuildMembers()) or GetNumGuildMembers()
+    local total = GetNumGuildMembers()
     local data = {}
-    local locToToken = {}
-    for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE) do locToToken[localized] = token end
-    for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE)   do locToToken[localized] = token end
+    local filter = guildTabData.filter or ""
+    local showOffline = guildTabData.showOffline
+
     for i = 1, total do
-        local name, _, _, _, classLoc, _, _, _, online = GetGuildRosterInfo(i)
-        online = not not online
-        if name and (online or showOffline) and (searchText == "" or name:lower():find(searchText, 1, true)) then
+        local name, _, _, _, classLocalized, _, _, _, online = GetGuildRosterInfo(i)
+        if name and classLocalized then
             local shortName = Ambiguate(name, "none")
-            local classToken = locToToken[classLoc] or "UNKNOWN"
-            if C_GuildInfo and C_GuildInfo.GetGuildRosterInfo then
-                local info = C_GuildInfo.GetGuildRosterInfo(i)
-                if info and info.classFileName then classToken = info.classFileName end
-            end
+            local classToken = RaidTrack.GetClassTokenFromLocalized(classLocalized)
             local epgp = RaidTrackDB.epgp[shortName] or { ep = 0, gp = 0 }
-            tinsert(data, { name = shortName, class = classToken, ep = epgp.ep, gp = epgp.gp, pr = (epgp.gp > 0 and epgp.ep / epgp.gp or 0), online = online })
+            local lowerName = shortName:lower()
+            local lowerClass = classToken:lower()
+            if (online or showOffline) and (filter == "" or lowerName:find(filter, 1, true) or lowerClass:find(filter, 1, true)) then
+                local pr = (epgp.gp > 0 and epgp.ep / epgp.gp or 0)
+                table.insert(data, {
+                    name = shortName,
+                    class = classToken,
+                    ep = epgp.ep,
+                    gp = epgp.gp,
+                    pr = pr,
+                    online = online
+                })
+            end
         end
     end
-    table.sort(data, SortByPR)
-    RaidTrack.currentGuildData = data
 
-    local y = -10
-    local headers = { "Name", "EP", "GP", "PR" }
-    local xpos = { COL.name, COL.ep, COL.gp, COL.pr }
-    for i, label in ipairs(headers) do
-        local fs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        fs:SetPoint("TOPLEFT", content, "TOPLEFT", xpos[i], y)
-        if i > 1 then fs:SetWidth(COL_WIDTH); fs:SetJustifyH("CENTER") end
-        fs:SetText(label)
-        fs:SetDrawLayer("OVERLAY", 2)
-        tinsert(uiRows, { name = fs })
+    table.sort(data, function(a, b) return a.pr > b.pr end)
+    guildTabData.currentData = data
+    guildTabData.rowPoolSize = 75
+    ClearSelection()
+    guildTabData.lastSelectedIdx = nil
+
+    if guildTabData.countLabel then
+        local displayed = math.min(guildTabData.rowPoolSize, #guildTabData.currentData)
+        local selectedCount = 0
+        for _ in pairs(guildTabData.selected) do selectedCount = selectedCount + 1 end
+        guildTabData.countLabel:SetText("Displaying: " .. displayed .. " / " .. #guildTabData.currentData .. " | Selected: " .. selectedCount)
     end
 
-    y = y - 20
-    for idx, d in ipairs(data) do
-        local function OnRowClick()
-            if IsShiftKeyDown() and RaidTrack.lastSelectedIdx then
+    RaidTrack.RenderGuildRows()
+end
+function RaidTrack.RenderGuildRows()
+    if not guildTabData.scrollFrame then
+        return
+    end
+    -- Safe cleanup of highlight textures before recycling rows
+for _, child in ipairs(guildTabData.scrollFrame.children or {}) do
+    if child._highlightTexture then
+        child._highlightTexture:SetColorTexture(0, 0, 0, 0)
+        child._highlightTexture:Hide()
+        child._highlightTexture:SetParent(nil)
+        child._highlightTexture = nil
+    end
+end
+
+guildTabData.scrollFrame:ReleaseChildren()
+guildTabData.visibleRows = {}
+
+
+    local header = AceGUI:Create("SimpleGroup")
+    header:SetLayout("Flow")
+    header:SetFullWidth(true)
+    header:SetHeight(24)
+    for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}}) do
+
+    local lbl = AceGUI:Create("Label")
+    lbl:SetText(h[1])
+    lbl:SetWidth(h[2])
+    lbl:SetJustifyH("CENTER")
+    lbl:SetFontObject(GameFontNormal)
+    header:AddChild(lbl)
+end
+
+    guildTabData.scrollFrame:AddChild(header)
+
+    for i = 1, math.min(guildTabData.rowPoolSize, #guildTabData.currentData) do
+        local d = guildTabData.currentData[i]
+        local row = AceGUI:Create("SimpleGroup")
+        
+
+        row:SetLayout("Flow")
+        row:SetFullWidth(true)
+        row:SetHeight(24)
+        -- Add highlight texture
+RaidTrack.ApplyHighlight(row, IsSelected(d.name))
+
+
+
+        local icon = AceGUI:Create("Icon")
+        icon:SetImage("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+        icon:SetImageSize(16, 16)
+        icon:SetWidth(20)
+        icon:SetHeight(20)
+        icon.image:SetTexCoord(GetClassIconTextureCoords(d.class))
+        row:AddChild(icon)
+
+        local col = RAID_CLASS_COLORS[d.class] or {
+            r = 1,
+            g = 1,
+            b = 1
+        }
+        if not d.online then
+            col = {
+                r = col.r * 0.5,
+                g = col.g * 0.5,
+                b = col.b * 0.5
+            }
+        end
+
+        local fields = {{
+            text = d.name,
+            width = 140
+        }, {
+            text = d.ep,
+            width = 60
+        }, {
+            text = d.gp,
+            width = 60
+        }, {
+            text = string.format("%.2f", d.pr),
+            width = 60
+        }}
+        for _, field in ipairs(fields) do
+    local lbl = AceGUI:Create("Label")
+    lbl:SetText(tostring(field.text))
+    lbl:SetWidth(field.width)
+    lbl:SetJustifyH("CENTER")
+    lbl:SetFontObject(GameFontNormal)
+    lbl:SetColor(col.r, col.g, col.b)
+    row:AddChild(lbl)
+end
+
+
+        row.frame:SetScript("OnMouseDown", function()
+            local idx = i
+            local d = guildTabData.currentData[idx]
+            if not d then
+                return
+            end
+
+            if IsShiftKeyDown() and guildTabData.lastSelectedIdx then
                 ClearSelection()
-                SetSelectedRange(data, RaidTrack.lastSelectedIdx, idx)
+                SetSelectedRange(guildTabData.currentData, guildTabData.lastSelectedIdx, idx)
             elseif IsControlKeyDown() then
-                RaidTrack.selectedGuild[d.name] = not RaidTrack.selectedGuild[d.name]
+                guildTabData.selected[d.name] = not guildTabData.selected[d.name]
             else
                 ClearSelection()
-                RaidTrack.selectedGuild[d.name] = true
+                guildTabData.selected[d.name] = true
             end
-            RaidTrack.lastSelectedIdx = idx
-            RaidTrack.UpdateGuildRoster()
-        end
+            guildTabData.lastSelectedIdx = idx
 
-        local bg = CreateFrame("Button", nil, content, "BackdropTemplate")
-        bg:SetFrameStrata("BACKGROUND")
-        bg:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y + 5)
-        bg:SetSize(scroll:GetWidth(), 20)
-        bg:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground" })
-        local sel = IsSelected(d.name)
-        bg:SetBackdropColor(sel and 0.1 or 0, sel and 0.1 or 0, sel and 0.5 or 0, sel and 0.5 or 0)
-        bg:SetScript("OnClick", OnRowClick)
+            local selectedCount = 0
+            for _ in pairs(guildTabData.selected) do
+                selectedCount = selectedCount + 1
+            end
+            if guildTabData.countLabel then
+                local displayed = math.min(guildTabData.rowPoolSize, #guildTabData.currentData)
+                guildTabData.countLabel:SetText("Displaying: " .. displayed .. " / " .. #guildTabData.currentData ..
+                                                    " | Selected: " .. selectedCount)
+            end
 
-        local icon = content:CreateTexture(nil, "OVERLAY")
-        icon:SetSize(16, 16)
-        icon:SetPoint("TOPLEFT", content, "TOPLEFT", COL.name - 16, y)
-        if CLASS_ICON_TCOORDS[d.class] then
-            icon:SetTexture("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
-            icon:SetTexCoord(unpack(CLASS_ICON_TCOORDS[d.class]))
-        else
-            icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-        end
-        icon:SetDrawLayer("OVERLAY", 1)
+            RaidTrack.RenderGuildRows()
+        end)
 
-        local col = RAID_CLASS_COLORS[d.class] or { r=1, g=1, b=1 }
-        if not d.online then col = { r=col.r*0.5, g=col.g*0.5, b=col.b*0.5 } end
+        guildTabData.scrollFrame:AddChild(row)
+        table.insert(guildTabData.visibleRows, row)
+    end
 
-        local nameFS = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        nameFS:SetPoint("TOPLEFT", content, "TOPLEFT", COL.name, y)
-        nameFS:SetText(d.name)
-        nameFS:SetTextColor(col.r, col.g, col.b)
-        nameFS:SetDrawLayer("OVERLAY", 2)
-        tinsert(uiRows, { bg=bg, icon=icon, name=nameFS })
-
-        local stats = { d.ep, d.gp, string.format("%.2f", d.pr) }
-        for i, val in ipairs(stats) do
-            local fs = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            fs:SetPoint("TOPLEFT", content, "TOPLEFT", xpos[i+1], y)
-            fs:SetWidth(COL_WIDTH); fs:SetJustifyH("CENTER")
-            fs:SetText(val)
-            fs:SetTextColor(col.r, col.g, col.b)
-            fs:SetDrawLayer("OVERLAY", 2)
-            tinsert(uiRows, { fs = fs })
-        end
-
-        y = y - 20
+    if guildTabData.rowPoolSize < #guildTabData.currentData then
+        local btn = AceGUI:Create("Button")
+        btn:SetText("Load More")
+        btn:SetFullWidth(true)
+        btn:SetCallback("OnClick", function()
+            guildTabData.rowPoolSize = guildTabData.rowPoolSize + 100
+            RaidTrack.RenderGuildRows()
+        end)
+        guildTabData.scrollFrame:AddChild(btn)
     end
 end
 
--- Refresh button
-local refresh = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-refresh:SetSize(80, 25)
-refresh:SetPoint("TOPLEFT", scroll, "BOTTOMLEFT", 0, -10)
-refresh:SetText("Refresh")
-refresh:SetScript("OnClick", RaidTrack.UpdateGuildRoster)
+function RaidTrack:Render_guildTab(container)
+    container:SetLayout("Fill")
+    local mainGroup = AceGUI:Create("SimpleGroup")
+    mainGroup:SetFullWidth(true)
+    mainGroup:SetFullHeight(true)
+    mainGroup:SetLayout("Flow")
+    container:AddChild(mainGroup)
 
--- Auto-update on show
-frame:SetScript("OnShow", RaidTrack.UpdateGuildRoster)
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetLayout("List")
+    scroll:SetRelativeWidth(0.68)
+    scroll:SetFullHeight(true)
+    mainGroup:AddChild(scroll)
+    guildTabData.scrollFrame = scroll
+
+    local rightPanel = AceGUI:Create("InlineGroup")
+    rightPanel:SetTitle("Controls")
+    rightPanel:SetRelativeWidth(0.32)
+    rightPanel:SetFullHeight(true)
+    rightPanel:SetLayout("Flow")
+    mainGroup:AddChild(rightPanel)
+
+    local countLabel = AceGUI:Create("Label")
+    countLabel:SetText("Displaying: ?")
+    countLabel:SetFullWidth(true)
+    rightPanel:AddChild(countLabel)
+    guildTabData.countLabel = countLabel
+
+    local showOfflineCheck = AceGUI:Create("CheckBox")
+    showOfflineCheck:SetLabel("Show Offline")
+    showOfflineCheck:SetValue(guildTabData.showOffline)
+    showOfflineCheck:SetCallback("OnValueChanged", function(_, _, val)
+        guildTabData.showOffline = val
+        guildTabData.forceRefresh = true
+        RaidTrack.UpdateGuildRoster()
+    end)
+    rightPanel:AddChild(showOfflineCheck)
+
+    local searchBox = AceGUI:Create("EditBox")
+    searchBox:SetLabel("Search")
+    searchBox:SetText(guildTabData.filter)
+    searchBox:SetCallback("OnTextChanged", function(_, _, text)
+    guildTabData.filter = text:lower()
+    guildTabData.forceRefresh = true
+
+    if guildSearchDebounceTimer then
+        guildSearchDebounceTimer:Cancel()
+    end
+
+    guildSearchDebounceTimer = C_Timer.NewTimer(0.3, function()
+        RaidTrack.UpdateGuildRoster()
+    end)
+end)
+
+    rightPanel:AddChild(searchBox)
+
+    local epInput = AceGUI:Create("EditBox")
+    epInput:SetLabel("EP")
+    rightPanel:AddChild(epInput)
+
+    local gpInput = AceGUI:Create("EditBox")
+    gpInput:SetLabel("GP")
+    rightPanel:AddChild(gpInput)
+
+    local applyBtn = AceGUI:Create("Button")
+    applyBtn:SetText("Apply")
+    applyBtn:SetCallback("OnClick", function()
+        local epv = tonumber(epInput:GetText()) or 0
+        local gpv = tonumber(gpInput:GetText()) or 0
+        for _, d in ipairs(guildTabData.currentData or {}) do
+            if guildTabData.selected[d.name] then
+                RaidTrack.LogEPGPChange(d.name, epv, gpv, "GuildTab")
+            end
+        end
+        RaidTrack.UpdateGuildRoster()
+        RaidTrack.SendSyncData()
+    end)
+    rightPanel:AddChild(applyBtn)
+
+    RaidTrack.UpdateGuildRoster()
+    
+
+end
+RaidTrack.UpdateGuildList = function()
+    if RaidTrack.UpdateGuildRoster then
+        RaidTrack.UpdateGuildRoster()
+    end
+end

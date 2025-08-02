@@ -204,3 +204,30 @@ function RaidTrack.FindItemInBags(itemID)
     end
     return nil, nil
 end
+
+function RaidTrack.ApplyHighlight(row, isSelected)
+    if not row or not row.frame then return end
+
+    if not row._highlightTexture then
+        local tex = row.frame:CreateTexture(nil, "BACKGROUND")
+        tex:SetAllPoints()
+        row._highlightTexture = tex
+    end
+
+    if isSelected then
+        row._highlightTexture:SetColorTexture(0.1, 0.1, 0.3, 0.4)
+        row._highlightTexture:Show()
+    else
+        row._highlightTexture:SetColorTexture(0, 0, 0, 0)
+        row._highlightTexture:Hide()
+    end
+end
+function RaidTrack.GetClassTokenFromLocalized(classLocalized)
+    for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do
+        if localized == classLocalized then return token end
+    end
+    for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do
+        if localized == classLocalized then return token end
+    end
+    return classLocalized
+end
