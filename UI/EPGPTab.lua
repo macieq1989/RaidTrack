@@ -33,43 +33,47 @@ local function BuildEPGPData()
     local data = {}
     local filter = epgpTabData.filter:lower()
 
-    for playerName, stats in pairs(RaidTrackDB.epgp) do
-        local ep = stats.ep or 0
-        local gp = stats.gp or 0
-        local pr = (gp > 0) and (ep / gp) or 0
+    for k, stats in pairs(RaidTrackDB.epgp) do
+        local playerName = type(k) == "string" and k or stats.name
+        if type(playerName) == "string" then
+            local ep = stats.ep or 0
+            local gp = stats.gp or 0
+            local pr = (gp > 0) and (ep / gp) or 0
 
-        -- PRÓBA POBRANIA KLASY
-        local classToken
-        local fullName = playerName
-        if not UnitExists(playerName) then
-            -- fallback na obecne API guildowe
-            for i = 1, GetNumGuildMembers() do
-                local name, _, _, _, classLocalized = GetGuildRosterInfo(i)
-                if name and Ambiguate(name, "none") == playerName then
-                    classToken = RaidTrack.GetClassTokenFromLocalized(classLocalized)
-                    break
+            -- PRÓBA POBRANIA KLASY
+            local classToken
+            if not UnitExists(playerName) then
+                for i = 1, GetNumGuildMembers() do
+                    local name, _, _, _, classLocalized = GetGuildRosterInfo(i)
+                    if name and Ambiguate(name, "none") == playerName then
+                        classToken = RaidTrack.GetClassTokenFromLocalized(classLocalized)
+                        break
+                    end
                 end
             end
-        end
-        classToken = classToken or select(2, UnitClass(playerName)) or "PRIEST"
+            classToken = classToken or select(2, UnitClass(playerName)) or "PRIEST"
 
-        local lowerName = playerName:lower()
-        local lowerClass = classToken:lower()
+            local lowerName = playerName:lower()
+            local lowerClass = classToken:lower()
 
-        if filter == "" or lowerName:find(filter, 1, true) or lowerClass:find(filter, 1, true) then
-            table.insert(data, {
-                name = playerName,
-                ep = ep,
-                gp = gp,
-                pr = pr,
-                class = classToken,
-            })
+            if filter == "" or lowerName:find(filter, 1, true) or lowerClass:find(filter, 1, true) then
+                table.insert(data, {
+                    name = playerName,
+                    ep = ep,
+                    gp = gp,
+                    pr = pr,
+                    class = classToken,
+                })
+            end
+        else
+            RaidTrack.AddDebugMessage("Skipping malformed epgp entry: " .. tostring(k))
         end
     end
 
     table.sort(data, function(a, b) return a.pr > b.pr end)
     epgpTabData.currentData = data
 end
+
 
 
 local function BuildEPGPUI(scrollContainer)
@@ -201,7 +205,8 @@ end
 end
 
 local function UpdateEPGPList()
-    epgpTabData.rowPoolSize = 75 -- reset przy każdej aktualizacji (opcjonalnie)
+    epgpTabData.rowPoolSize = epgpTabData.rowPoolSize or 75
+-- reset przy każdej aktualizacji (opcjonalnie)
     BuildEPGPData()
     BuildEPGPUI(epgpTabData.epgpScrollContainer)
 end

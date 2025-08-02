@@ -1,3 +1,4 @@
+-- LootTab.lua
 local addonName, RaidTrack = ...
 local AceGUI = LibStub("AceGUI-3.0")
 
@@ -7,8 +8,10 @@ local lastItemLink
 local historyRows = {}
 
 local raidBosses = {
-    ["Nerub’ar Palace"] = {"Rasha’nan","The Pale Serpent","Queen Ansurek","The Silkshaper","Skittering Horror","The Burrower Below","Anub’ikkaj","Xal’Zix"},
-    ["Liberation of Undermine"] = {"Mogul Razdunk","Underboss Greasetooth","Trade Prince Gallywix","King Drekaz","Mechanical Maw","Vault Guardian V-300","Sparkfuse Syndicate","Smoglord Throg"},
+    ["Nerub’ar Palace"] = {"Rasha’nan", "The Pale Serpent", "Queen Ansurek", "The Silkshaper", "Skittering Horror",
+                             "The Burrower Below", "Anub’ikkaj", "Xal’Zix"},
+    ["Liberation of Undermine"] = {"Mogul Razdunk", "Underboss Greasetooth", "Trade Prince Gallywix", "King Drekaz",
+                                   "Mechanical Maw", "Vault Guardian V-300", "Sparkfuse Syndicate", "Smoglord Throg"}
 }
 
 function RaidTrack:Render_lootTab(container)
@@ -20,7 +23,6 @@ function RaidTrack:Render_lootTab(container)
     mainGroup:SetLayout("Flow")
     container:AddChild(mainGroup)
 
-    -- Left side: Dropdowns + Editboxes + Buttons
     local leftPanel = AceGUI:Create("InlineGroup")
     leftPanel:SetTitle("Loot Entry")
     leftPanel:SetRelativeWidth(0.4)
@@ -28,39 +30,31 @@ function RaidTrack:Render_lootTab(container)
     leftPanel:SetFullHeight(true)
     mainGroup:AddChild(leftPanel)
 
-    -- Raid dropdown
     local raidDD = AceGUI:Create("Dropdown")
     raidDD:SetLabel("Select Raid")
     raidDD:SetFullWidth(true)
     leftPanel:AddChild(raidDD)
 
-    -- Player dropdown
     local playerDD = AceGUI:Create("Dropdown")
     playerDD:SetLabel("Select Player")
     playerDD:SetFullWidth(true)
     leftPanel:AddChild(playerDD)
 
-    -- Boss dropdown
     local bossDD = AceGUI:Create("Dropdown")
     bossDD:SetLabel("Select Boss")
     bossDD:SetFullWidth(true)
     leftPanel:AddChild(bossDD)
 
-    -- Item editbox
     local itemEB = AceGUI:Create("EditBox")
     itemEB:SetLabel("Item Link")
     itemEB:SetFullWidth(true)
     leftPanel:AddChild(itemEB)
 
-     -- GP editbox
     local gpEB = AceGUI:Create("EditBox")
     gpEB:SetLabel("GP Cost")
     gpEB:SetWidth(80)
-    -- Usuwamy gpEB:SetNumeric(true)
     leftPanel:AddChild(gpEB)
 
-
-    -- Buttons container
     local btnGroup = AceGUI:Create("SimpleGroup")
     btnGroup:SetLayout("Flow")
     btnGroup:SetFullWidth(true)
@@ -81,7 +75,6 @@ function RaidTrack:Render_lootTab(container)
     infoLabel:SetFullWidth(true)
     leftPanel:AddChild(infoLabel)
 
-    -- Right side: Loot History Scroll
     local rightPanel = AceGUI:Create("InlineGroup")
     rightPanel:SetTitle("Loot History (last 50 entries)")
     rightPanel:SetRelativeWidth(0.58)
@@ -95,50 +88,70 @@ function RaidTrack:Render_lootTab(container)
     scroll:SetFullHeight(true)
     rightPanel:AddChild(scroll)
 
-    -- Function to update dropdown contents
+   local function UpdatePlayerDropdown()
+    local players = {}
+    local num = GetNumGroupMembers()
+    for i = 1, num do
+        local name = GetRaidRosterInfo(i)
+        if name then
+            players[name] = name -- ← poprawione
+        end
+    end
+    playerDD:SetList(players)
+    playerDD:SetValue(nil)
+end
+
+    local function DebugPrint(msg)
+        RaidTrack.AddDebugMessage("[LOOTTAB DEBUG] " .. tostring(msg))
+    end
+
+   local function UpdateBossDropdown()
+    local raidSelected = raidDD:GetValue()
+    DebugPrint("UpdateBossDropdown called, selected raid: " .. tostring(raidSelected))
+
+    if raidSelected and raidBosses[raidSelected] then
+        local bosses = raidBosses[raidSelected]
+        DebugPrint("Boss list found for raid: " .. raidSelected .. ", count: " .. #bosses)
+
+        local mapped = {}
+        for _, boss in ipairs(bosses) do
+            mapped[boss] = boss -- ← mapowanie klucz = wartość
+        end
+        bossDD:SetList(mapped)
+        bossDD:SetValue(nil)
+    else
+        DebugPrint("No bosses found for selected raid!")
+        bossDD:SetList({})
+        bossDD:SetValue(nil)
+    end
+end
+
+
     local function UpdateRaidDropdown()
+        DebugPrint("UpdateRaidDropdown called")
+
         local raids = {}
-        for raidName in pairs(raidBosses) do
-            table.insert(raids, raidName)
+        local raidList = {}
+        for raidName, _ in pairs(raidBosses) do
+            raidList[raidName] = raidName -- ważne: key == value
         end
-        table.sort(raids)
-        raidDD:SetList(raids)
-        raidDD:SetValue(nil)
-    end
+        raidDD:SetList(raidList)
 
-    local function UpdatePlayerDropdown()
-        local players = {}
-        local num = GetNumGroupMembers()
-        for i=1,num do
-            local name = GetRaidRosterInfo(i)
-            if name then table.insert(players, name) end
-        end
-        table.sort(players)
-        playerDD:SetList(players)
-        playerDD:SetValue(nil)
-    end
+        if #raids > 0 then
+            local first = next(raidList)
 
-    local function UpdateBossDropdown()
-        local raidSelected = raidDD:GetValue()
-        if raidSelected and raidBosses[raidSelected] then
-            local bosses = {}
-            for _, b in ipairs(raidBosses[raidSelected]) do
-                table.insert(bosses, b)
-            end
-            bossDD:SetList(bosses)
-            bossDD:SetValue(nil)
+            DebugPrint("Setting raid dropdown to: " .. first)
+            raidDD:SetValue(first)
+            UpdateBossDropdown()
         else
-            bossDD:SetList({})
-            bossDD:SetValue(nil)
+            DebugPrint("No raids found in raidBosses table")
         end
     end
 
-    -- Event: when raid selected, update bosses
     raidDD:SetCallback("OnValueChanged", function()
         UpdateBossDropdown()
     end)
 
-    -- Button handlers
     saveBtn:SetCallback("OnClick", function()
         local pl = playerDD:GetValue()
         local bs = bossDD:GetValue()
@@ -157,7 +170,7 @@ function RaidTrack:Render_lootTab(container)
             player = pl,
             item = it,
             boss = bs,
-            gp = gp,
+            gp = gp
         }
         table.insert(RaidTrackDB.lootHistory, entry)
         RaidTrack.LogEPGPChange(pl, 0, gp, "Loot Save")
@@ -184,32 +197,39 @@ function RaidTrack:Render_lootTab(container)
         end
     end)
 
-    -- Loot history update function
     function UpdateLootHistory()
-        -- Clear old rows
-       scroll:ReleaseChildren()
-historyRows = {}
-
+        scroll:ReleaseChildren()
+        historyRows = {}
 
         local data = RaidTrackDB.lootHistory or {}
         local maxEntries = 50
         local count = math.min(#data, maxEntries)
 
-        scroll:ReleaseChildren()
+        for i = #data, #data - count + 1, -1 do
 
-        for i = #data - count + 1, #data do
             local e = data[i]
             local row = AceGUI:Create("Label")
-            local _, c = UnitClass(e.player)
-            local col = RAID_CLASS_COLORS[c] or {r=1,g=1,b=1}
-            local hex = string.format("%02x%02x%02x", col.r*255, col.g*255, col.b*255)
+            local classToken
+            if type(e.player) == "string" and UnitExists(e.player) then
+                _, classToken = UnitClass(e.player)
+            end
+            classToken = classToken or "PRIEST"
+            local col = RAID_CLASS_COLORS[classToken] or {
+                r = 1,
+                g = 1,
+                b = 1
+            }
+
+            local hex = string.format("%02x%02x%02x", col.r * 255, col.g * 255, col.b * 255)
             local _, _, q = GetItemInfo(e.item)
-            local qc = ITEM_QUALITY_COLORS[q] or {r=1,g=1,b=1}
-            local qh = string.format("%02x%02x%02x", qc.r*255, qc.g*255, qc.b*255)
-            local text = string.format(
-                "|cff%s%s|r - looted |cff%s%s|r from %s (GP:%d) [%s]",
-                hex, e.player, qh, e.item, e.boss or "Unknown", e.gp, e.time or date("%H:%M:%S", e.timestamp)
-            )
+            local qc = ITEM_QUALITY_COLORS[q] or {
+                r = 1,
+                g = 1,
+                b = 1
+            }
+            local qh = string.format("%02x%02x%02x", qc.r * 255, qc.g * 255, qc.b * 255)
+            local text = string.format("|cff%s%s|r - looted |cff%s%s|r from %s (GP:%d) [%s]", hex, e.player, qh, e.item,
+                e.boss or "Unknown", e.gp, e.time or date("%H:%M:%S", e.timestamp))
             row:SetText(text)
             row:SetFullWidth(true)
             scroll:AddChild(row)
@@ -219,7 +239,6 @@ historyRows = {}
 
     RaidTrack.UpdateLootList = UpdateLootHistory
 
-    -- Event to catch chat loot links for auto-paste
     local chatFrameListener = CreateFrame("Frame")
     chatFrameListener:RegisterEvent("CHAT_MSG_LOOT")
     chatFrameListener:RegisterEvent("CHAT_MSG_RAID")
@@ -233,9 +252,10 @@ historyRows = {}
         end
     end)
 
-    -- Hook item clicks with shift for auto-paste
     hooksecurefunc("HandleModifiedItemClick", function(link)
-        if not frame:IsShown() then return end
+        if not frame:IsShown() then
+            return
+        end
         if type(link) == "string" and IsShiftKeyDown() then
             local itemString = link:match("|Hitem:.-|h.-|h") or link
             lastItemLink = itemString
@@ -244,10 +264,8 @@ historyRows = {}
         end
     end)
 
-    -- Initialize dropdowns & history
+    -- Init dropdowns
     UpdateRaidDropdown()
     UpdatePlayerDropdown()
-    UpdateBossDropdown()
     UpdateLootHistory()
 end
-

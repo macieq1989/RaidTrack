@@ -35,7 +35,8 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
 function RaidTrack.ShowContextMenu()
     if not RaidTrack.menu then
         local menu = CreateFrame("Frame", "RaidTrackMinimapMenu", UIParent, "BackdropTemplate")
-        menu:SetSize(140, 100)
+        menu:SetSize(140, 120)
+
         menu:SetBackdrop({
             bgFile = "Interface/Tooltips/UI-Tooltip-Background",
             edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
