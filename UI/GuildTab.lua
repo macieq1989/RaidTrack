@@ -61,6 +61,15 @@ local function SetSelectedRange(data, fromIdx, toIdx)
     end
 end
 
+local function UpdateHighlighting()
+    for idx, row in ipairs(guildTabData.visibleRows or {}) do
+        local data = guildTabData.currentData[idx]
+        if row.bg and data then
+            row.bg:SetShown(IsSelected(data.name))
+        end
+    end
+end
+
 function RaidTrack.UpdateGuildRoster()
     local total = GetNumGuildMembers()
     local data = {}
@@ -92,20 +101,35 @@ function RaidTrack.UpdateGuildRoster()
     table.sort(data, function(a, b) return a.pr > b.pr end)
     guildTabData.currentData = data
     guildTabData.rowPoolSize = 75
+    ClearSelection()
+    guildTabData.lastSelectedIdx = nil
 
     if guildTabData.countLabel then
         local displayed = math.min(guildTabData.rowPoolSize, #guildTabData.currentData)
-        guildTabData.countLabel:SetText("Displaying: " .. displayed .. " / " .. #guildTabData.currentData)
+        local selectedCount = 0
+        for _ in pairs(guildTabData.selected) do selectedCount = selectedCount + 1 end
+        guildTabData.countLabel:SetText("Displaying: " .. displayed .. " / " .. #guildTabData.currentData .. " | Selected: " .. selectedCount)
     end
 
     RaidTrack.RenderGuildRows()
 end
-
-
 function RaidTrack.RenderGuildRows()
-    if not guildTabData.scrollFrame then return end
-    guildTabData.scrollFrame:ReleaseChildren()
-    guildTabData.visibleRows = {}
+    if not guildTabData.scrollFrame then
+        return
+    end
+    -- Safe cleanup of highlight textures before recycling rows
+for _, child in ipairs(guildTabData.scrollFrame.children or {}) do
+    if child._highlightTexture then
+        child._highlightTexture:SetColorTexture(0, 0, 0, 0)
+        child._highlightTexture:Hide()
+        child._highlightTexture:SetParent(nil)
+        child._highlightTexture = nil
+    end
+end
+
+guildTabData.scrollFrame:ReleaseChildren()
+guildTabData.visibleRows = {}
+
 
     local header = AceGUI:Create("SimpleGroup")
     header:SetLayout("Flow")
@@ -123,14 +147,15 @@ function RaidTrack.RenderGuildRows()
     for i = 1, math.min(guildTabData.rowPoolSize, #guildTabData.currentData) do
         local d = guildTabData.currentData[i]
         local row = AceGUI:Create("SimpleGroup")
+        
+
         row:SetLayout("Flow")
         row:SetFullWidth(true)
         row:SetHeight(24)
+        -- Add highlight texture
+RaidTrack.ApplyHighlight(row, IsSelected(d.name))
 
-        row.bg = row.frame:CreateTexture(nil, "BACKGROUND")
-        row.bg:SetAllPoints()
-        row.bg:SetShown(IsSelected(d.name))
-        row.bg:SetColorTexture(0.1, 0.1, 0.3, 0.4)
+
 
         local icon = AceGUI:Create("Icon")
         icon:SetImage("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
@@ -140,17 +165,32 @@ function RaidTrack.RenderGuildRows()
         icon.image:SetTexCoord(GetClassIconTextureCoords(d.class))
         row:AddChild(icon)
 
-        local col = RAID_CLASS_COLORS[d.class] or {r=1, g=1, b=1}
+        local col = RAID_CLASS_COLORS[d.class] or {
+            r = 1,
+            g = 1,
+            b = 1
+        }
         if not d.online then
-            col = {r = col.r * 0.5, g = col.g * 0.5, b = col.b * 0.5}
+            col = {
+                r = col.r * 0.5,
+                g = col.g * 0.5,
+                b = col.b * 0.5
+            }
         end
 
-        local fields = {
-            { text = d.name, width = 140 },
-            { text = d.ep,   width = 60 },
-            { text = d.gp,   width = 60 },
-            { text = string.format("%.2f", d.pr), width = 60 },
-        }
+        local fields = {{
+            text = d.name,
+            width = 140
+        }, {
+            text = d.ep,
+            width = 60
+        }, {
+            text = d.gp,
+            width = 60
+        }, {
+            text = string.format("%.2f", d.pr),
+            width = 60
+        }}
         for _, field in ipairs(fields) do
             local lbl = AceGUI:Create("Label")
             lbl:SetText(tostring(field.text))
@@ -161,8 +201,33 @@ function RaidTrack.RenderGuildRows()
         end
 
         row.frame:SetScript("OnMouseDown", function()
-            ClearSelection()
-            guildTabData.selected[d.name] = true
+            local idx = i
+            local d = guildTabData.currentData[idx]
+            if not d then
+                return
+            end
+
+            if IsShiftKeyDown() and guildTabData.lastSelectedIdx then
+                ClearSelection()
+                SetSelectedRange(guildTabData.currentData, guildTabData.lastSelectedIdx, idx)
+            elseif IsControlKeyDown() then
+                guildTabData.selected[d.name] = not guildTabData.selected[d.name]
+            else
+                ClearSelection()
+                guildTabData.selected[d.name] = true
+            end
+            guildTabData.lastSelectedIdx = idx
+
+            local selectedCount = 0
+            for _ in pairs(guildTabData.selected) do
+                selectedCount = selectedCount + 1
+            end
+            if guildTabData.countLabel then
+                local displayed = math.min(guildTabData.rowPoolSize, #guildTabData.currentData)
+                guildTabData.countLabel:SetText("Displaying: " .. displayed .. " / " .. #guildTabData.currentData ..
+                                                    " | Selected: " .. selectedCount)
+            end
+
             RaidTrack.RenderGuildRows()
         end)
 
@@ -181,8 +246,6 @@ function RaidTrack.RenderGuildRows()
         guildTabData.scrollFrame:AddChild(btn)
     end
 end
-
-
 
 function RaidTrack:Render_guildTab(container)
     container:SetLayout("Fill")
@@ -256,6 +319,5 @@ function RaidTrack:Render_guildTab(container)
     rightPanel:AddChild(applyBtn)
 
     RaidTrack.UpdateGuildRoster()
-    
 
 end

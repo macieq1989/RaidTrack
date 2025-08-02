@@ -6,7 +6,7 @@ local raidTabData = {
     filter = "",
     currentData = {},
     lastRaidIdx = nil,
-    raidScrollContainer = nil,
+    raidScrollContainer = nil
 }
 
 local classMap = {}
@@ -30,7 +30,7 @@ local CLASS_ICON_TCOORDS = {
     DEATHKNIGHT = {0.25, 0.49609375, 0.5, 0.75},
     MONK = {0.49609375, 0.7421875, 0.5, 0.75},
     DEMONHUNTER = {0.7421875, 0.98828125, 0.5, 0.75},
-    EVOKER = {0, 0.25, 0.75, 1},
+    EVOKER = {0, 0.25, 0.75, 1}
 }
 
 local function GetClassIconTextureCoords(class)
@@ -56,9 +56,6 @@ local function SetSelectedRange(data, fromIdx, toIdx)
     end
 end
 
-
-
-
 local function BuildData()
     local dataRows = {}
     local n = GetNumGroupMembers() or 0
@@ -67,7 +64,10 @@ local function BuildData()
         local name, _, _, _, classLoc = GetRaidRosterInfo(i)
         if name then
             local classToken = classMap[classLoc] or classLoc:upper()
-            local st = RaidTrackDB.epgp[name] or { ep = 0, gp = 0 }
+            local st = RaidTrackDB.epgp[name] or {
+                ep = 0,
+                gp = 0
+            }
             local pr = (st.gp > 0) and (st.ep / st.gp) or 0
             local unit = "raid" .. i
             local role = (UnitGroupRolesAssigned and UnitGroupRolesAssigned(unit)) or "NONE"
@@ -78,17 +78,21 @@ local function BuildData()
                     gp = st.gp,
                     pr = pr,
                     class = classToken,
-                    role = role,
+                    role = role
                 })
             end
         end
     end
-    table.sort(dataRows, function(a, b) return a.pr > b.pr end)
+    table.sort(dataRows, function(a, b)
+        return a.pr > b.pr
+    end)
     raidTabData.currentData = dataRows
 end
 
 local function UpdateRaidList()
-    BuildData()
+    if not raidTabData.skipRebuild then
+        BuildData()
+    end
     if raidTabData.raidScrollContainer then
         raidTabData.raidScrollContainer:ReleaseChildren()
 
@@ -154,17 +158,8 @@ local function UpdateRaidList()
             row:SetFullWidth(true)
             row:SetHeight(22)
 
-            -- Highlight selected rows
-            if raidTabData.selected[d.name] then
-                if not row.bg then
-                    row.bg = row.frame:CreateTexture(nil, "BACKGROUND")
-                    row.bg:SetAllPoints()
-                end
-                row.bg:SetColorTexture(0.2, 0.4, 0.6, 0.4)
-                row.bg:Show()
-            elseif row.bg then
-                row.bg:Hide()
-            end
+            -- Safe highlight using per-frame cleanup
+            RaidTrack.ApplyHighlight(row, IsSelected(d.name))
 
             -- Class icon
             local icon = AceGUI:Create("Icon")
@@ -196,8 +191,13 @@ local function UpdateRaidList()
             -- Player name label
             local nameLabel = AceGUI:Create("Label")
             local _, class = UnitClass(d.name)
-            local color = RAID_CLASS_COLORS[class or ""] or { r = 1, g = 1, b = 1 }
-            local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, d.name)
+            local color = RAID_CLASS_COLORS[class or ""] or {
+                r = 1,
+                g = 1,
+                b = 1
+            }
+            local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255,
+                d.name)
             nameLabel:SetText(coloredName)
             nameLabel:SetFontObject(GameFontNormal)
             nameLabel:SetWidth(130)
@@ -234,34 +234,44 @@ local function UpdateRaidList()
             row:AddChild(prLabel)
 
             -- Click handler
-        row.frame:SetScript("OnMouseDown", function()
-   if IsShiftKeyDown() and type(raidTabData.lastRaidIdx) == "number" then
-    ClearSelection()
-    SetSelectedRange(raidTabData.currentData, raidTabData.lastRaidIdx, idx)
-elseif IsControlKeyDown() then
-    raidTabData.selected[d.name] = not raidTabData.selected[d.name]
-else
-    ClearSelection()
-    raidTabData.selected[d.name] = true
+            local function CreateRowClickHandler(rowIndex)
+    return function()
+        local data = raidTabData.currentData[rowIndex]
+        if not data then return end
+
+        if IsShiftKeyDown() and raidTabData.lastRaidIdx then
+            SetSelectedRange(raidTabData.currentData, raidTabData.lastRaidIdx, rowIndex)
+        elseif IsControlKeyDown() then
+            raidTabData.selected[data.name] = not raidTabData.selected[data.name]
+        else
+            ClearSelection()
+            raidTabData.selected[data.name] = true
+        end
+
+        raidTabData.lastRaidIdx = rowIndex
+
+        raidTabData.skipRebuild = true
+        UpdateRaidList()
+        raidTabData.skipRebuild = false
+    end
 end
-raidTabData.lastRaidIdx = idx
-UpdateRaidList()
-
-end)
 
 
-
+            row.frame:SetScript("OnMouseDown", CreateRowClickHandler(idx))
 
             raidTabData.raidScrollContainer:AddChild(row)
         end
     end
+    if raidTabData.countLabel then
+        local selectedCount = 0
+        for _ in pairs(raidTabData.selected) do
+            selectedCount = selectedCount + 1
+        end
+        local total = #raidTabData.currentData or 0
+        raidTabData.countLabel:SetText("Selected: " .. selectedCount .. " / " .. total)
+    end
+
 end
-    
-
-
-
-
-
 
 function RaidTrack.ClearRaidSelection()
     ClearSelection()
@@ -270,7 +280,17 @@ end
 function RaidTrack.DeactivateRaidTab()
     -- Usuń callbacki, odłącz eventy, wyczyść UI raidTab aby nie działał gdy nie jest aktywny
     if raidTabData.raidScrollContainer then
+        -- PRE-CLEAN highlight textures
+        for _, child in ipairs(raidTabData.raidScrollContainer.children or {}) do
+            if child._highlightTexture then
+                child._highlightTexture:SetColorTexture(0, 0, 0, 0)
+                child._highlightTexture:Hide()
+                child._highlightTexture:SetParent(nil)
+                child._highlightTexture = nil
+            end
+        end
         raidTabData.raidScrollContainer:ReleaseChildren()
+
         raidTabData.raidScrollContainer = nil
     end
     ClearSelection()
@@ -312,6 +332,12 @@ function RaidTrack:Render_raidTab(container)
     controlsScroll:SetFullWidth(true)
     controlsScroll:SetFullHeight(true)
     rightPanel:AddChild(controlsScroll)
+
+    local countLabel = AceGUI:Create("Label")
+    countLabel:SetText("Selected: 0 / 0")
+    countLabel:SetFullWidth(true)
+    controlsScroll:AddChild(countLabel)
+    raidTabData.countLabel = countLabel
 
     local searchBox = AceGUI:Create("EditBox")
     searchBox:SetLabel("Search")
