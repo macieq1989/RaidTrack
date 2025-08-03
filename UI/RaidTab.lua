@@ -235,27 +235,28 @@ local function UpdateRaidList()
 
             -- Click handler
             local function CreateRowClickHandler(rowIndex)
-    return function()
-        local data = raidTabData.currentData[rowIndex]
-        if not data then return end
+                return function()
+                    local data = raidTabData.currentData[rowIndex]
+                    if not data then
+                        return
+                    end
 
-        if IsShiftKeyDown() and raidTabData.lastRaidIdx then
-            SetSelectedRange(raidTabData.currentData, raidTabData.lastRaidIdx, rowIndex)
-        elseif IsControlKeyDown() then
-            raidTabData.selected[data.name] = not raidTabData.selected[data.name]
-        else
-            ClearSelection()
-            raidTabData.selected[data.name] = true
-        end
+                    if IsShiftKeyDown() and raidTabData.lastRaidIdx then
+                        SetSelectedRange(raidTabData.currentData, raidTabData.lastRaidIdx, rowIndex)
+                    elseif IsControlKeyDown() then
+                        raidTabData.selected[data.name] = not raidTabData.selected[data.name]
+                    else
+                        ClearSelection()
+                        raidTabData.selected[data.name] = true
+                    end
 
-        raidTabData.lastRaidIdx = rowIndex
+                    raidTabData.lastRaidIdx = rowIndex
 
-        raidTabData.skipRebuild = true
-        UpdateRaidList()
-        raidTabData.skipRebuild = false
-    end
-end
-
+                    raidTabData.skipRebuild = true
+                    UpdateRaidList()
+                    raidTabData.skipRebuild = false
+                end
+            end
 
             row.frame:SetScript("OnMouseDown", CreateRowClickHandler(idx))
 
@@ -333,6 +334,117 @@ function RaidTrack:Render_raidTab(container)
     controlsScroll:SetFullHeight(true)
     rightPanel:AddChild(controlsScroll)
 
+    -- === RAID CONTROL SECTION ===
+
+    -- STATUS LABEL
+    local statusLabel = AceGUI:Create("Label")
+    statusLabel:SetFullWidth(true)
+    RaidTrack.raidTabStatusLabel = statusLabel
+    controlsScroll:AddChild(statusLabel)
+    RaidTrack.UpdateRaidTabStatus = function()
+        if not RaidTrack.raidTabStatusLabel then
+            return
+        end
+        local id = RaidTrack.activeRaidID
+        if not id then
+            RaidTrack.raidTabStatusLabel:SetText("|cffffccccRaid Status: INACTIVE|r")
+            return
+        end
+        for _, raid in ipairs(RaidTrackDB.raidHistory or {}) do
+            if raid.id == id then
+                local elapsed = SecondsToTime(time() - raid.started)
+                RaidTrack.raidTabStatusLabel:SetText(string.format("|cffccffccRaid Status: ACTIVE - %s [%s]|r", elapsed,
+                    raid.name))
+                return
+            end
+        end
+    end
+
+    -- PRESET DROPDOWN
+    local presetDD = AceGUI:Create("Dropdown")
+    presetDD:SetLabel("Raid Preset")
+    presetDD:SetFullWidth(true)
+    RaidTrack.raidPresetDropdown = presetDD
+    controlsScroll:AddChild(presetDD)
+
+    -- DELETE PRESET BUTTON
+    local deleteBtn = AceGUI:Create("Button")
+    deleteBtn:SetText("Delete Preset")
+    deleteBtn:SetFullWidth(true)
+    deleteBtn:SetCallback("OnClick", function()
+        local selected = presetDD:GetValue()
+        if not selected then
+            RaidTrack.AddDebugMessage("No preset selected to delete.")
+            return
+        end
+
+        -- Confirm + delete
+        StaticPopupDialogs["RT_CONFIRM_DELETE_PRESET"] = {
+            text = "Delete preset '%s'?",
+            button1 = "Delete",
+            button2 = "Cancel",
+            OnAccept = function()
+                RaidTrack.DeleteRaidPreset(selected)
+                presetDD:SetValue(nil)
+                RefreshPresetDropdown()
+            end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+            preferredIndex = 3
+        }
+
+        StaticPopup_Show("RT_CONFIRM_DELETE_PRESET", selected)
+    end)
+    controlsScroll:AddChild(deleteBtn)
+
+    -- Wypełnienie listy presetów
+    local function RefreshPresetDropdown()
+        local presets = RaidTrack.GetRaidPresets()
+        local values = {}
+        for name in pairs(presets) do
+            values[name] = name
+        end
+        presetDD:SetList(values)
+    end
+    RefreshPresetDropdown()
+
+    -- CONFIGURE BUTTON
+    local configBtn = AceGUI:Create("Button")
+    configBtn:SetText("Configure Raid")
+    configBtn:SetFullWidth(true)
+    configBtn:SetCallback("OnClick", function()
+        RaidTrack:OpenRaidConfigWindow()
+    end)
+    controlsScroll:AddChild(configBtn)
+
+    -- START RAID BUTTON
+    local startBtn = AceGUI:Create("Button")
+    startBtn:SetText("Start Raid")
+    startBtn:SetFullWidth(true)
+    startBtn:SetCallback("OnClick", function()
+        local selectedPreset = presetDD:GetValue()
+        if not selectedPreset then
+            RaidTrack.AddDebugMessage("No preset selected.")
+            return
+        end
+        local zone = GetRealZoneText() or "Unknown Zone"
+        local raidName = zone .. " " .. date("%Y-%m-%d")
+        RaidTrack.CreateRaidInstance(raidName, zone, selectedPreset)
+        RaidTrack.UpdateRaidTabStatus()
+    end)
+    controlsScroll:AddChild(startBtn)
+
+    -- END RAID BUTTON
+    local endBtn = AceGUI:Create("Button")
+    endBtn:SetText("End Raid")
+    endBtn:SetFullWidth(true)
+    endBtn:SetCallback("OnClick", function()
+        RaidTrack.EndActiveRaid()
+        RaidTrack.UpdateRaidTabStatus()
+    end)
+    controlsScroll:AddChild(endBtn)
+
     local countLabel = AceGUI:Create("Label")
     countLabel:SetText("Selected: 0 / 0")
     countLabel:SetFullWidth(true)
@@ -382,5 +494,7 @@ function RaidTrack:Render_raidTab(container)
     applyGroup:AddChild(applyBtn)
 
     UpdateRaidList()
+    RaidTrack.UpdateRaidTabStatus()
+
 end
 RaidTrack.UpdateRaidList = UpdateRaidList
