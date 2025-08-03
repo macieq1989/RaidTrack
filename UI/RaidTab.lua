@@ -305,15 +305,20 @@ function RaidTrack:Render_raidTab(container)
     local mainGroup = AceGUI:Create("SimpleGroup")
     mainGroup:SetFullWidth(true)
     mainGroup:SetFullHeight(true)
-    mainGroup:SetLayout("Flow") -- left and right panels side by side
-    container:AddChild(mainGroup)
+    mainGroup:SetLayout("Fill")
+
+    local rowGroup = AceGUI:Create("SimpleGroup")
+    rowGroup:SetFullWidth(true)
+    rowGroup:SetFullHeight(true)
+    rowGroup:SetLayout("Flow")
+    mainGroup:AddChild(rowGroup)
 
     local leftPanel = AceGUI:Create("InlineGroup")
     leftPanel:SetTitle("Raid Roster")
     leftPanel:SetRelativeWidth(0.68)
     leftPanel:SetFullHeight(true)
     leftPanel:SetLayout("Fill")
-    mainGroup:AddChild(leftPanel)
+    rowGroup:AddChild(leftPanel)
 
     raidTabData.raidScrollContainer = AceGUI:Create("ScrollFrame")
     raidTabData.raidScrollContainer:SetLayout("List")
@@ -325,14 +330,18 @@ function RaidTrack:Render_raidTab(container)
     rightPanel:SetTitle("Controls")
     rightPanel:SetRelativeWidth(0.32)
     rightPanel:SetFullHeight(true)
-    rightPanel:SetLayout("Flow")
-    mainGroup:AddChild(rightPanel)
+    rightPanel:SetLayout("List")
+    rowGroup:AddChild(rightPanel)
 
-    local controlsScroll = AceGUI:Create("ScrollFrame")
-    controlsScroll:SetLayout("List")
+    local controlsScroll = AceGUI:Create("SimpleGroup")
     controlsScroll:SetFullWidth(true)
     controlsScroll:SetFullHeight(true)
+    controlsScroll:SetLayout("List")
     rightPanel:AddChild(controlsScroll)
+
+    container:AddChild(mainGroup)
+
+
 
     -- === RAID CONTROL SECTION ===
 
@@ -492,6 +501,9 @@ function RaidTrack:Render_raidTab(container)
         RaidTrack.SendSyncData()
     end)
     applyGroup:AddChild(applyBtn)
+
+
+
 
     UpdateRaidList()
     RaidTrack.UpdateRaidTabStatus()
