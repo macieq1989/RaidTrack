@@ -231,3 +231,119 @@ function RaidTrack.GetClassTokenFromLocalized(classLocalized)
     end
     return classLocalized
 end
+
+
+-- Tworzy popup frame (raz na start)
+local function CreateEPGPToastFrame()
+    local frame = CreateFrame("Frame", "RaidTrackEPGPToast", UIParent)
+
+    frame:SetPoint("TOP", UIParent, "TOP", 0, -200)
+    frame:SetSize(300, 60)
+
+    frame.bgTex = frame:CreateTexture(nil, "BACKGROUND")
+    frame.bgTex:SetAllPoints()
+    frame.bgTex:SetColorTexture(0, 0.4, 0, 0.6)
+
+    frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    frame.text:SetPoint("CENTER")
+    frame.text:SetText("")
+
+    frame:SetScript("OnShow", function(self)
+        C_Timer.After(4, function() self:Hide() end)
+    end)
+
+    
+    return frame
+end
+
+-- Główna funkcja wywołująca popup
+function RaidTrack:ShowEPGPToast(amount, playerName, type)
+    if not amount or not playerName or not type then return end
+
+local icon
+local color
+local prefix
+
+if type == "EP" then
+    icon = 237540 -- Ikona: achievement_pvp_a_13
+    if amount >= 0 then
+        color = "|cff00ff00" -- Zielony dla dodatnich EP
+    else
+        color = "|cffff0000" -- Czerwony dla ujemnych EP
+    end
+elseif type == "GP" then
+    icon = 136244 -- Ikona: INV_Misc_Coin_01
+    if amount >= 0 then
+        color = "|cffffcc00" -- Złoty dla dodatnich GP
+    else
+        color = "|cffff0000" -- Czerwony dla ujemnych GP
+    end
+end
+
+prefix = (amount >= 0) and "+" or ""  -- dodaj + tylko dla dodatnich
+
+
+local iconTag = "|TInterface\\Icons\\Achievement_PVP_A_13:20:20:0:0|t"
+local text = iconTag .. " " .. color .. type .. " +" .. amount .. " -> " .. playerName .. "|r"
+
+
+
+    -- Pokaż ikonowy alert frame (używając AlertFrame systemu)
+    local frame = RaidTrack.epgpAlertFrame or CreateFrame("Frame", nil, UIParent)
+    RaidTrack.epgpAlertFrame = frame
+
+    frame:SetSize(300, 64)
+    frame:SetPoint("TOP", UIParent, "TOP", 0, -200)
+    frame:Show()
+
+    if not frame.bg then
+        frame.bg = frame:CreateTexture(nil, "BACKGROUND")
+        frame.bg:SetAllPoints()
+        frame.bg:SetColorTexture(0, 0, 0, 0.8)
+    end
+
+    if not frame.icon then
+        frame.icon = frame:CreateTexture(nil, "ARTWORK")
+        frame.icon:SetSize(40, 40)
+        frame.icon:SetPoint("LEFT", frame, "LEFT", 10, 0)
+    end
+
+    if not frame.text then
+        frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+        frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0)
+        frame.text:SetJustifyH("LEFT")
+    end
+
+    frame.icon:SetTexture(icon)
+    frame.text:SetText(text)
+
+    -- Pokazujemy przez 5 sek, potem zanik przez 2 sekundy
+frame:SetAlpha(1)
+C_Timer.After(5, function()
+    if frame:IsShown() then
+        UIFrameFadeOut(frame, 2, 1, 0)
+    end
+end)
+
+end
+
+
+function RaidTrack:ShowItemToast(itemID, playerName, epAmount)
+    if not itemID then return end
+
+    -- Załaduj item (jeśli jeszcze nie w cache)
+    local itemName, itemLink, itemRarity, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
+    if not itemName then
+        -- Item jeszcze nie w cache – spróbuj później
+        C_Timer.After(0.5, function()
+            RaidTrack:ShowItemToast(itemID, playerName, epAmount)
+        end)
+        return
+    end
+
+    -- Zbuduj tekst do pokazania (możesz dostosować)
+    local overrideText = format("EP +%d → %s", epAmount or 0, playerName or "Unknown")
+
+    -- Pokaż loot alert
+    LootWonAlertFrame_ShowAlert(LootWonAlertFrame1, itemLink, 1, true, false, false, false, nil, nil, nil, nil, overrideText)
+end
