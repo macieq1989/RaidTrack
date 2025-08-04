@@ -4,7 +4,7 @@
 ## Version: 1.0
 ## SavedVariables: RaidTrackDB
 
-## OptionalDeps: Ace3, Blizzard_UIPanelMenus
+## OptionalDeps: Ace3, Blizzard_UIPanelMenus, Blizzard_EncounterJournal
 
 # Libraries
 Libs/LibStub/LibStub.lua
@@ -48,7 +48,10 @@ Core/EPGP.lua
 Core/Sync.lua
 Core/Auction.lua
 Core/AutoTrade.lua
+Core/OfflineRaidData.lua
 Core/RaidConfig.lua
+Core/BossKill.lua
+
 
 # --- UI ---
 UI/MainFrame.lua

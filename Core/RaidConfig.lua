@@ -5,8 +5,6 @@ RaidTrackDB = RaidTrackDB or {}
 RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
 
 
-RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
-
 -- Zapisuje preset pod daną nazwą
 function RaidTrack.SaveRaidPreset(name, config)
     RaidTrackDB = RaidTrackDB or {}
@@ -51,8 +49,6 @@ function RaidTrack.LoadRaidPreset(name, callback)
         RaidTrack.AddDebugMessage("LoadRaidPreset: preset not found or invalid callback")
     end
 end
-
-
 
 -- Tworzy instancję nowego raidu na podstawie wybranego presetu
 function RaidTrack.CreateRaidInstance(name, zone, presetName)
@@ -100,7 +96,9 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName)
 end
 
 function RaidTrack.EndActiveRaid()
-    if not RaidTrack.activeRaidID then return end
+    if not RaidTrack.activeRaidID then
+        return
+    end
 
     for _, raid in ipairs(RaidTrackDB.raidHistory or {}) do
         if raid.id == RaidTrack.activeRaidID then
@@ -114,8 +112,12 @@ function RaidTrack.EndActiveRaid()
 end
 
 function RaidTrack.RegisterBossKill(bossName)
-    if not RaidTrack.activeRaidID then return end
-    if not bossName then return end
+    if not RaidTrack.activeRaidID then
+        return
+    end
+    if not bossName then
+        return
+    end
 
     for _, raid in ipairs(RaidTrackDB.raidHistory or {}) do
         if raid.id == RaidTrack.activeRaidID then
@@ -156,9 +158,21 @@ end
 local encounterFrame = CreateFrame("Frame")
 encounterFrame:RegisterEvent("ENCOUNTER_END")
 encounterFrame:SetScript("OnEvent", function(_, _, encounterID, encounterName, difficultyID, groupSize, success)
-    if success ~= 1 then return end
-    if not RaidTrack.activeRaidID then return end
+    if success ~= 1 then
+        return
+    end
+    if not RaidTrack.activeRaidID then
+        return
+    end
 
     -- Rejestracja bossa
     RaidTrack.RegisterBossKill(encounterName)
 end)
+
+function RaidTrack.GetRaidPresetNames()
+    local names = {}
+    for name, _ in pairs(RaidTrackDB.raidPresets or {}) do
+        table.insert(names, name)
+    end
+    return names
+end
