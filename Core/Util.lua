@@ -347,3 +347,14 @@ function RaidTrack:ShowItemToast(itemID, playerName, epAmount)
     -- Pokaż loot alert
     LootWonAlertFrame_ShowAlert(LootWonAlertFrame1, itemLink, 1, true, false, false, false, nil, nil, nil, nil, overrideText)
 end
+
+function RaidTrack.FindExpansionForInstance(instanceID)
+    for _, exp in ipairs(RaidTrack.OfflineRaidData or {}) do
+        for _, inst in ipairs(exp.instances or {}) do
+            if inst.id == instanceID then
+                return exp.expansionID
+            end
+        end
+    end
+    return nil
+end

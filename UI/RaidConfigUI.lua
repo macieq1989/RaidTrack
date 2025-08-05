@@ -3,6 +3,11 @@ local AceGUI = LibStub("AceGUI-3.0")
 
 function RaidTrack:OpenRaidConfigWindow()
     local bossPanel -- placeholder na dynamiczny panel z listą bossów
+    local isConfigReady = false
+    local flaskCB, enchantsCB, autoPassCB = nil, nil, nil
+local onTimeBox, bossKillBox, fullAttBox, minTimeBox = nil, nil, nil, nil
+local difficultyDD, expansionDD, instanceDD = nil, nil, nil  -- ⬅ dodaj to tutaj!
+
 
     if self.raidConfigWindow then
         self.raidConfigWindow:Show()
@@ -33,11 +38,12 @@ function RaidTrack:OpenRaidConfigWindow()
 
     local config = {
         autoPass = true,
-        lootMode = "auction",
+        minTimeInRaid = 60,
         awardEP = {
             onTime = 5,
-            bossKill = 10,
+            bossKill = 0,
             fullAttendance = 15
+
         },
         requirements = {
             flask = true,
@@ -56,69 +62,113 @@ function RaidTrack:OpenRaidConfigWindow()
         leftPanel:AddChild(cb)
     end
 
-    AddCheckbox("Auto-Pass for all players (except leader)", config.autoPass, function(val)
+    autoPassCB = AceGUI:Create("CheckBox")
+    autoPassCB:SetLabel("Auto-Pass for all players (except leader)")
+    autoPassCB:SetValue(config.autoPass)
+    autoPassCB:SetCallback("OnValueChanged", function(_, _, val)
         config.autoPass = val
     end)
-    AddCheckbox("Require Flask", config.requirements.flask, function(val)
+    leftPanel:AddChild(autoPassCB)
+
+    flaskCB = AceGUI:Create("CheckBox")
+    flaskCB:SetLabel("Require Flask")
+    flaskCB:SetValue(config.requirements.flask)
+    flaskCB:SetCallback("OnValueChanged", function(_, _, val)
         config.requirements.flask = val
     end)
-    AddCheckbox("Require Enchants", config.requirements.enchants, function(val)
+    leftPanel:AddChild(flaskCB)
+
+    enchantsCB = AceGUI:Create("CheckBox")
+    enchantsCB:SetLabel("Require Enchants")
+    enchantsCB:SetValue(config.requirements.enchants)
+    enchantsCB:SetCallback("OnValueChanged", function(_, _, val)
         config.requirements.enchants = val
     end)
+    leftPanel:AddChild(enchantsCB)
 
-    local lootList = {
-        manual = "Manual",
-        auction = "Auction",
-        softres = "Soft-reserve"
-    }
-    local lootMode = AceGUI:Create("Dropdown")
-    lootMode:SetLabel("Loot Mode")
-    lootMode:SetList(lootList)
-    lootMode:SetValue("auction")
-    config.lootMode = "auction"
-    lootMode:SetCallback("OnValueChanged", function(_, _, val)
-        config.lootMode = val
+    onTimeBox = AceGUI:Create("EditBox")
+    onTimeBox:SetLabel("EP: On Time Bonus")
+    onTimeBox:SetText(tostring(config.awardEP.onTime))
+    onTimeBox:SetCallback("OnTextChanged", function(_, _, val)
+        config.awardEP.onTime = tonumber(val) or 0
     end)
-    leftPanel:AddChild(lootMode)
+    leftPanel:AddChild(onTimeBox)
 
-    local function AddEPBox(label, field)
-        local box = AceGUI:Create("EditBox")
-        box:SetLabel(label)
-        box:SetText(tostring(config.awardEP[field]))
-        box:SetCallback("OnTextChanged", function(_, _, val)
-            config.awardEP[field] = tonumber(val) or 0
-        end)
-        leftPanel:AddChild(box)
-    end
+    bossKillBox = AceGUI:Create("EditBox")
+    bossKillBox:SetLabel("EP: Per Boss Kill")
+    bossKillBox:SetText(tostring(config.awardEP.bossKill))
+    bossKillBox:SetCallback("OnTextChanged", function(_, _, val)
+        config.awardEP.bossKill = tonumber(val) or 0
+    end)
+    leftPanel:AddChild(bossKillBox)
+
+    fullAttBox = AceGUI:Create("EditBox")
+    fullAttBox:SetLabel("EP: Full Attendance")
+    fullAttBox:SetText(tostring(config.awardEP.fullAttendance))
+    fullAttBox:SetCallback("OnTextChanged", function(_, _, val)
+        config.awardEP.fullAttendance = tonumber(val) or 0
+    end)
+    leftPanel:AddChild(fullAttBox)
+
+    local bossEPWindow -- zapamiętujemy okno, by nie otwierać wiele razy
 
     local function TryRenderBossPanel()
-        if bossPanel and bossPanel.ReleaseChildren then
-            bossPanel:ReleaseChildren()
-            bossPanel.frame:Hide()
+        if bossEPWindow then
+            bossEPWindow:Release()
+            bossEPWindow = nil
         end
 
         if not (config.selectedInstance and config.selectedDifficulty) then
+            print("|cffff0000RaidTrack:|r Select instance and difficulty first.")
             return
         end
 
-        local bosses = RaidTrack.GetOfflineBosses(config.selectedInstance)
+        local bosses = config.selectedInstance and RaidTrack.GetOfflineBosses(config.selectedInstance) or {}
         if not bosses or #bosses == 0 then
+            print("|cffff0000RaidTrack:|r No bosses found for this instanceID: " .. tostring(config.selectedInstance))
             return
         end
 
-        if bossPanel then
-            bossPanel:Release()
-            bossPanel = nil
+        bossEPWindow = AceGUI:Create("Frame")
+        bossEPWindow:SetTitle("Boss EP - " .. config.selectedDifficulty)
+        bossEPWindow:SetLayout("Fill")
+        bossEPWindow:SetWidth(300)
+        bossEPWindow:EnableResize(false)
+
+        -- Dopasuj wysokość i przypnij
+        if RaidTrack.raidConfigWindow then
+            local anchor = RaidTrack.raidConfigWindow.frame
+            local height = anchor:GetHeight()
+            bossEPWindow:SetHeight(height)
+
+            local f = bossEPWindow.frame
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 0, 0)
         end
 
-        bossPanel = AceGUI:Create("InlineGroup")
-        bossPanel:SetTitle("Boss EP - " .. config.selectedDifficulty)
-        bossPanel:SetRelativeWidth(0.5)
-        bossPanel:SetFullHeight(true)
-        bossPanel:SetLayout("List")
-        mainGroup:AddChild(bossPanel)
+        bossEPWindow:SetCallback("OnClose", function()
+            bossEPWindow = nil
+        end)
 
-        for _, b in ipairs(bosses) do
+        -- Scrollframe wewnątrz okna
+        local scroll = AceGUI:Create("ScrollFrame")
+        scroll:SetLayout("List")
+        scroll:SetFullWidth(true)
+        scroll:SetFullHeight(true)
+        bossEPWindow:AddChild(scroll)
+
+        if bosses then
+            for _, b in ipairs(bosses) do
+                config.bosses[b.name] = config.bosses[b.name] or {
+                    Normal = 0,
+                    Heroic = 0,
+                    Mythic = 0
+                }
+            end
+        end
+
+        for _, b in ipairs(bosses or {}) do
+
             local bossName = b.name
             local diff = config.selectedDifficulty
             config.bosses[bossName] = config.bosses[bossName] or {
@@ -135,13 +185,19 @@ function RaidTrack:OpenRaidConfigWindow()
             row:SetCallback("OnTextChanged", function(_, _, text)
                 config.bosses[bossName][diff] = tonumber(text) or 0
             end)
-            bossPanel:AddChild(row)
+            scroll:AddChild(row)
         end
+
     end
 
-    AddEPBox("EP: On Time Bonus", "onTime")
-    AddEPBox("EP: Per Boss Kill", "bossKill")
-    AddEPBox("EP: Full Attendance", "fullAttendance")
+    -- Min. Time in Raid
+    local minTimeBox = AceGUI:Create("EditBox")
+    minTimeBox:SetLabel("Min. Time in Raid (minutes)")
+    minTimeBox:SetText(tostring(config.minTimeInRaid))
+    minTimeBox:SetCallback("OnTextChanged", function(_, _, val)
+        config.minTimeInRaid = tonumber(val) or 0
+    end)
+    leftPanel:AddChild(minTimeBox)
 
     RaidTrack.raidPresetDropdown = AceGUI:Create("Dropdown")
     RaidTrack.raidPresetDropdown:SetLabel("Load Raid Preset")
@@ -165,28 +221,76 @@ function RaidTrack:OpenRaidConfigWindow()
     end
 
     RaidTrack.raidPresetDropdown:SetCallback("OnValueChanged", function(_, _, val)
+        -- Bezpiecznik: odczekaj aż UI się w pełni zbuduje
+        if not flaskCB or not onTimeBox then
+            C_Timer.After(0.1, function()
+                RaidTrack.raidPresetDropdown:Fire("OnValueChanged", nil, val)
+            end)
+            return
+        end
+
         local preset = RaidTrack.GetRaidPresets()[val]
         if preset then
             config = preset
             config.selectedDifficulty = config.selectedDifficulty or "Normal"
-            config.selectedInstance = config.selectedInstance or instanceDD:GetValue()
+            config.selectedInstance = config.selectedInstance or nil
+            config.minTimeInRaid = config.minTimeInRaid or 15
+
+            -- Odtwórz checkboxy
+            flaskCB:SetValue(config.requirements.flask)
+            enchantsCB:SetValue(config.requirements.enchants)
+            autoPassCB:SetValue(config.autoPass)
+
+            -- Odtwórz pola EP
+            onTimeBox:SetText(tostring(config.awardEP.onTime))
+            bossKillBox:SetText(tostring(config.awardEP.bossKill))
+            fullAttBox:SetText(tostring(config.awardEP.fullAttendance))
+            minTimeBox:SetText(tostring(config.minTimeInRaid))
+
+            -- Ustaw dropdowny
+            difficultyDD:SetValue(config.selectedDifficulty)
+            difficultyDD:Fire("OnValueChanged", difficultyDD, config.selectedDifficulty)
+
+            if config.selectedInstance then
+                local foundExp = RaidTrack.FindExpansionForInstance(config.selectedInstance)
+                if foundExp then
+                    expansionDD:SetValue(foundExp)
+                    expansionDD:Fire("OnValueChanged", expansionDD, foundExp)
+                    C_Timer.After(0.1, function()
+                        instanceDD:SetValue(tostring(config.selectedInstance))
+
+                        instanceDD:Fire("OnValueChanged", instanceDD, config.selectedInstance)
+                    end)
+                end
+            end
+
             TryRenderBossPanel()
         end
     end)
+
     leftPanel:AddChild(RaidTrack.raidPresetDropdown)
 
     local presetInput = AceGUI:Create("EditBox")
     presetInput:SetLabel("Save as Preset (name)")
     leftPanel:AddChild(presetInput)
+    -- Kontener na przyciski w poziomie
+    local buttonGroup = AceGUI:Create("SimpleGroup")
+    buttonGroup:SetFullWidth(true)
+    buttonGroup:SetLayout("Flow")
+    leftPanel:AddChild(buttonGroup)
 
+    -- Save Preset
     local saveBtn = AceGUI:Create("Button")
     saveBtn:SetText("Save Preset")
+    saveBtn:SetRelativeWidth(0.5)
     saveBtn:SetCallback("OnClick", function()
         local name = presetInput:GetText()
         if not name or name:trim() == "" then
             RaidTrack.AddDebugMessage("Save Preset clicked but no valid name given")
             return
         end
+
+        config.minTimeInRaid = config.minTimeInRaid or 60
 
         RaidTrack.SaveRaidPreset(name, config)
 
@@ -202,7 +306,31 @@ function RaidTrack:OpenRaidConfigWindow()
             RaidTrack.raidPresetDropdown:SetValue(name)
         end
     end)
-    leftPanel:AddChild(saveBtn)
+    buttonGroup:AddChild(saveBtn)
+
+    -- Delete Preset
+    local deleteBtn = AceGUI:Create("Button")
+    deleteBtn:SetText("Delete Preset")
+    deleteBtn:SetRelativeWidth(0.5)
+    deleteBtn:SetCallback("OnClick", function()
+        local name = RaidTrack.raidPresetDropdown:GetValue()
+        if not name then
+            return
+        end
+
+        RaidTrack.DeleteRaidPreset(name)
+
+        local presets = RaidTrack.GetRaidPresetNames()
+        local presetMap = {}
+        for _, presetName in pairs(presets) do
+            if presetName and presetName ~= "" then
+                presetMap[presetName] = presetName
+            end
+        end
+        RaidTrack.raidPresetDropdown:SetList(presetMap)
+        RaidTrack.raidPresetDropdown:SetValue(nil)
+    end)
+    buttonGroup:AddChild(deleteBtn)
 
     local rightPanel = AceGUI:Create("InlineGroup")
     rightPanel:SetTitle("Boss EP Awards")
@@ -211,17 +339,17 @@ function RaidTrack:OpenRaidConfigWindow()
     rightPanel:SetLayout("List")
     mainGroup:AddChild(rightPanel)
 
-    local expansionDD = AceGUI:Create("Dropdown")
+    expansionDD = AceGUI:Create("Dropdown")
     expansionDD:SetLabel("Expansion")
     expansionDD:SetFullWidth(true)
     rightPanel:AddChild(expansionDD)
 
-    local instanceDD = AceGUI:Create("Dropdown")
+    instanceDD = AceGUI:Create("Dropdown")
     instanceDD:SetLabel("Raid Instance")
     instanceDD:SetFullWidth(true)
     rightPanel:AddChild(instanceDD)
 
-    local difficultyDD = AceGUI:Create("Dropdown")
+    difficultyDD = AceGUI:Create("Dropdown")
     difficultyDD:SetLabel("Difficulty")
     difficultyDD:SetFullWidth(true)
     local difficulties = {
@@ -232,9 +360,16 @@ function RaidTrack:OpenRaidConfigWindow()
     difficultyDD:SetList(difficulties)
     config.selectedDifficulty = config.selectedDifficulty or "Normal"
     difficultyDD:SetValue(config.selectedDifficulty)
-    difficultyDD:SetCallback("OnValueChanged", function(_, _, val)
-        config.selectedDifficulty = val
+    difficultyDD:Fire("OnValueChanged", difficultyDD, config.selectedDifficulty)
+
+    difficultyDD:SetCallback("OnValueChanged", function(_, event, val)
+        if type(val) == "table" and val.value then
+            config.selectedDifficulty = val.value
+        else
+            config.selectedDifficulty = val
+        end
     end)
+
     rightPanel:AddChild(difficultyDD)
 
     local expansions = RaidTrack.GetOfflineExpansions()
@@ -247,53 +382,111 @@ function RaidTrack:OpenRaidConfigWindow()
     expansionDD:SetCallback("OnValueChanged", function(_, _, expID)
         local numID = tonumber(expID)
         local instances = RaidTrack.GetOfflineInstances(numID)
-        local instMap = {}
-        for _, i in ipairs(instances) do
-            instMap[i.id] = i.name
+
+        if not instances or #instances == 0 then
+            instanceDD:SetList({})
+            config.selectedInstance = nil
+            return
         end
+
+       local instMap = {}
+for _, i in ipairs(instances) do
+    instMap[tostring(i.id)] = i.name
+
+end
+
+
         instanceDD:SetList(instMap)
-        if next(instMap) then
-            local firstInst = next(instMap)
-            instanceDD:SetValue(firstInst)
-            instanceDD:Fire("OnValueChanged", firstInst)
+
+        local firstInst = instances[1]
+        if firstInst then
+            config.selectedInstance = firstInst.id
+            instanceDD:SetValue(tostring(firstInst.id))
+            instanceDD:SetText(firstInst.name)
+
+ -- <- TUTAJ dodajemy jawne SetValue
+
+            -- Ręcznie triggerujemy callback, żeby bossy się załadowały
+            if instanceDD.callbacks and instanceDD.callbacks.OnValueChanged then
+                for _, cb in ipairs(instanceDD.callbacks.OnValueChanged) do
+                    cb.func(instanceDD, "OnValueChanged", firstInst.id)
+                end
+            end
         end
     end)
 
     instanceDD:SetCallback("OnValueChanged", function(_, _, instID)
-        config.selectedInstance = instID
-        local bosses = RaidTrack.GetOfflineBosses(instID)
-        for _, b in ipairs(bosses) do
-            config.bosses[b.name] = config.bosses[b.name] or {
-                Normal = 0,
-                Heroic = 0,
-                Mythic = 0
-            }
+        local numID = tonumber(instID)
+        config.selectedInstance = numID
+
+        local bosses = RaidTrack.GetOfflineBosses(numID)
+        if bosses then
+            for _, b in ipairs(bosses) do
+                config.bosses[b.name] = config.bosses[b.name] or {
+                    Normal = 0,
+                    Heroic = 0,
+                    Mythic = 0
+                }
+            end
+        else
+            RaidTrack.AddDebugMessage("No bosses found for instanceID: " .. tostring(numID))
         end
     end)
 
-    if next(expMap) then
-        local firstExpID = next(expMap)
-        expansionDD:SetValue(firstExpID)
-
-        local instances = RaidTrack.GetOfflineInstances(firstExpID)
-        local instMap = {}
-        for _, i in ipairs(instances) do
-            instMap[i.id] = i.name
+    C_Timer.After(0.1, function()
+        local expansions = RaidTrack.GetOfflineExpansions()
+        if not expansions or #expansions == 0 then
+            return
         end
-        instanceDD:SetList(instMap)
 
-        if next(instMap) then
-            local firstInstID = next(instMap)
-            instanceDD:SetValue(firstInstID)
-            config.selectedInstance = firstInstID
+        local firstExpansion = expansions[1]
+        if not firstExpansion then
+            return
         end
-    end
+
+        expansionDD:SetValue(firstExpansion.expansionID)
+        expansionDD:Fire("OnValueChanged", expansionDD, firstExpansion.expansionID)
+
+        C_Timer.After(0.1, function()
+            local instances = RaidTrack.GetOfflineInstances(firstExpansion.expansionID)
+            if not instances or #instances == 0 then
+                return
+            end
+
+            local firstInstance = instances[1]
+            if not firstInstance then
+                return
+            end
+
+            instanceDD:SetValue(firstInstance.id)
+            instanceDD:Fire("OnValueChanged", instanceDD, firstInstance.id)
+            config.selectedInstance = firstInstance.id
+
+            local defaultDiff = "Normal"
+            difficultyDD:SetValue(defaultDiff)
+            difficultyDD:Fire("OnValueChanged", difficultyDD, defaultDiff)
+            config.selectedDifficulty = defaultDiff
+        end)
+    end)
+
+    -- difficultyDD poprawka
+    difficultyDD:SetValue(config.selectedDifficulty)
+    difficultyDD:Fire("OnValueChanged", difficultyDD, config.selectedDifficulty)
 
     local showBossesBtn = AceGUI:Create("Button")
     showBossesBtn:SetText("Show Boss List")
     showBossesBtn:SetCallback("OnClick", function()
+        if not isConfigReady then
+            print("|cffff0000RaidTrack:|r Configuration is still loading, please wait a moment.")
+            return
+        end
+        if not config.selectedInstance or not config.selectedDifficulty then
+            print("|cffff0000RaidTrack:|r Select instance and difficulty first.")
+            return
+        end
         TryRenderBossPanel()
     end)
+
     rightPanel:AddChild(showBossesBtn)
 
     local addBossBtn = AceGUI:Create("Button")
@@ -306,7 +499,9 @@ function RaidTrack:OpenRaidConfigWindow()
             hasEditBox = true,
             OnAccept = function(self)
                 local boss = self.editBox:GetText()
-                if not boss or boss:trim() == "" then return end
+                if not boss or boss:trim() == "" then
+                    return
+                end
 
                 config.bosses[boss] = config.bosses[boss] or {
                     Normal = 0,
@@ -333,4 +528,44 @@ function RaidTrack:OpenRaidConfigWindow()
         frame:Hide()
     end)
     frame:AddChild(confirmBtn)
+    -- Wymuszenie ustawienia domyślnych wartości dropdownów po pełnym załadowaniu
+C_Timer.After(0.2, function()
+    local expansions = RaidTrack.GetOfflineExpansions()
+    if not expansions or #expansions == 0 then return end
+
+    local firstExp = expansions[1]
+    if not firstExp then return end
+
+    expansionDD:SetValue(firstExp.expansionID)
+    expansionDD:Fire("OnValueChanged", expansionDD, firstExp.expansionID)
+
+    C_Timer.After(0.2, function()
+        local instances = RaidTrack.GetOfflineInstances(firstExp.expansionID)
+        if not instances or #instances == 0 then return end
+
+        local firstInst = instances[1]
+        if not firstInst then return end
+
+        -- Ręcznie wykonujemy callback
+        if instanceDD.callbacks and instanceDD.callbacks.OnValueChanged then
+            for _, cb in ipairs(instanceDD.callbacks.OnValueChanged) do
+                cb.func(instanceDD, "OnValueChanged", firstInst.id)
+            end
+        end
+        instanceDD:SetValue(tostring(firstInst.id))
+
+        local defaultDiff = "Normal"
+        difficultyDD:SetValue(defaultDiff)
+        difficultyDD:Fire("OnValueChanged", difficultyDD, defaultDiff)
+
+        config.selectedInstance = firstInst.id
+        config.selectedDifficulty = defaultDiff
+
+        isConfigReady = true
+    end)
+end)
+
+
+
+
 end
