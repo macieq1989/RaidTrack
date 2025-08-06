@@ -1015,3 +1015,13 @@ function RaidTrack.GetOfflineBosses(instanceID)
     return nil
 end
 
+function RaidTrack.FindOfflineInstanceByID(id)
+    for _, expansion in ipairs(RaidTrack.OfflineRaidData or {}) do
+        for _, instance in ipairs(expansion.instances or {}) do
+            if instance.id == id then
+                return instance
+            end
+        end
+    end
+    return nil
+end

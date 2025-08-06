@@ -5,9 +5,8 @@ function RaidTrack:OpenRaidConfigWindow()
     local bossPanel -- placeholder na dynamiczny panel z listą bossów
     local isConfigReady = false
     local flaskCB, enchantsCB, autoPassCB = nil, nil, nil
-local onTimeBox, bossKillBox, fullAttBox, minTimeBox = nil, nil, nil, nil
-local difficultyDD, expansionDD, instanceDD = nil, nil, nil  -- ⬅ dodaj to tutaj!
-
+    local onTimeBox, bossKillBox, fullAttBox, minTimeBox = nil, nil, nil, nil
+    local difficultyDD, expansionDD, instanceDD = nil, nil, nil -- ⬅ dodaj to tutaj!
 
     if self.raidConfigWindow then
         self.raidConfigWindow:Show()
@@ -111,6 +110,19 @@ local difficultyDD, expansionDD, instanceDD = nil, nil, nil  -- ⬅ dodaj to tut
     leftPanel:AddChild(fullAttBox)
 
     local bossEPWindow -- zapamiętujemy okno, by nie otwierać wiele razy
+
+    local function GetDifficultiesForInstance(instID)
+        local instance = RaidTrack.FindOfflineInstanceByID(instID)
+        if not instance then
+            return {}
+        end
+
+        local list = {}
+        for _, diff in ipairs(instance.difficulties or {}) do
+            list[diff] = diff
+        end
+        return list
+    end
 
     local function TryRenderBossPanel()
         if bossEPWindow then
@@ -248,18 +260,37 @@ local difficultyDD, expansionDD, instanceDD = nil, nil, nil  -- ⬅ dodaj to tut
             minTimeBox:SetText(tostring(config.minTimeInRaid))
 
             -- Ustaw dropdowny
-            difficultyDD:SetValue(config.selectedDifficulty)
-            difficultyDD:Fire("OnValueChanged", difficultyDD, config.selectedDifficulty)
-
             if config.selectedInstance then
                 local foundExp = RaidTrack.FindExpansionForInstance(config.selectedInstance)
                 if foundExp then
                     expansionDD:SetValue(foundExp)
                     expansionDD:Fire("OnValueChanged", expansionDD, foundExp)
-                    C_Timer.After(0.1, function()
-                        instanceDD:SetValue(tostring(config.selectedInstance))
 
-                        instanceDD:Fire("OnValueChanged", instanceDD, config.selectedInstance)
+                    C_Timer.After(0.1, function()
+                        local instances = RaidTrack.GetOfflineInstances(foundExp)
+                        local instMap = {}
+                        for _, i in ipairs(instances or {}) do
+                            instMap[tostring(i.id)] = i.name
+                        end
+                        instanceDD:SetList(instMap)
+
+                        if instMap[tostring(config.selectedInstance)] then
+                            instanceDD:SetValue(nil) -- reset najpierw, żeby trigger był pewny
+C_Timer.After(0, function()
+    instanceDD:SetValue(tostring(config.selectedInstance))
+    instanceDD:Fire("OnValueChanged", instanceDD, config.selectedInstance)
+end)
+
+
+                            -- Difficulty
+                            local diffs = GetDifficultiesForInstance(config.selectedInstance)
+                            difficultyDD:SetList(diffs)
+                            local diffToSet = config.selectedDifficulty or next(diffs)
+                            if diffToSet then
+                                difficultyDD:SetValue(diffToSet)
+                                difficultyDD:Fire("OnValueChanged", difficultyDD, diffToSet)
+                            end
+                        end
                     end)
                 end
             end
@@ -347,28 +378,45 @@ local difficultyDD, expansionDD, instanceDD = nil, nil, nil  -- ⬅ dodaj to tut
     instanceDD = AceGUI:Create("Dropdown")
     instanceDD:SetLabel("Raid Instance")
     instanceDD:SetFullWidth(true)
+
+    -- Instance Dropdown
+    instanceDD:SetCallback("OnValueChanged", function(_, _, instID)
+        local numID = tonumber(instID)
+        config.selectedInstance = numID
+
+        -- Bosses
+        local bosses = RaidTrack.GetOfflineBosses(numID)
+        if bosses then
+            for _, b in ipairs(bosses) do
+                config.bosses[b.name] = config.bosses[b.name] or {
+                    Normal = 0,
+                    Heroic = 0,
+                    Mythic = 0
+                }
+            end
+        end
+
+        -- 🔁 Ustawienia dropdownu Difficulty na podstawie instancji
+        local diffs = GetDifficultiesForInstance(numID)
+        difficultyDD:SetList(diffs)
+        local defaultDiff = next(diffs)
+        if defaultDiff then
+            difficultyDD:SetValue(defaultDiff)
+            config.selectedDifficulty = defaultDiff
+        end
+    end)
+
     rightPanel:AddChild(instanceDD)
 
     difficultyDD = AceGUI:Create("Dropdown")
     difficultyDD:SetLabel("Difficulty")
     difficultyDD:SetFullWidth(true)
-    local difficulties = {
-        Normal = "Normal",
-        Heroic = "Heroic",
-        Mythic = "Mythic"
-    }
-    difficultyDD:SetList(difficulties)
-    config.selectedDifficulty = config.selectedDifficulty or "Normal"
-    difficultyDD:SetValue(config.selectedDifficulty)
-    difficultyDD:Fire("OnValueChanged", difficultyDD, config.selectedDifficulty)
 
-    difficultyDD:SetCallback("OnValueChanged", function(_, event, val)
-        if type(val) == "table" and val.value then
-            config.selectedDifficulty = val.value
-        else
-            config.selectedDifficulty = val
-        end
-    end)
+    local defaultDiff = config.selectedDifficulty or "Normal"
+    difficultyDD:SetValue(defaultDiff)
+    difficultyDD:Fire("OnValueChanged", difficultyDD, defaultDiff)
+
+    config.selectedDifficulty = config.selectedDifficulty or "Normal"
 
     rightPanel:AddChild(difficultyDD)
 
@@ -379,99 +427,35 @@ local difficultyDD, expansionDD, instanceDD = nil, nil, nil  -- ⬅ dodaj to tut
     end
     expansionDD:SetList(expMap)
 
+    -- Expansion Dropdown
     expansionDD:SetCallback("OnValueChanged", function(_, _, expID)
         local numID = tonumber(expID)
         local instances = RaidTrack.GetOfflineInstances(numID)
-
         if not instances or #instances == 0 then
             instanceDD:SetList({})
+            instanceDD:SetValue(nil)
             config.selectedInstance = nil
             return
         end
 
-       local instMap = {}
-for _, i in ipairs(instances) do
-    instMap[tostring(i.id)] = i.name
-
-end
-
-
+        -- Zbuduj listę instancji
+        local instMap = {}
+        for _, i in ipairs(instances) do
+            instMap[tostring(i.id)] = i.name
+        end
         instanceDD:SetList(instMap)
 
+        -- Ustaw pierwszą instancję
         local firstInst = instances[1]
         if firstInst then
-            config.selectedInstance = firstInst.id
-            instanceDD:SetValue(tostring(firstInst.id))
-            instanceDD:SetText(firstInst.name)
-
- -- <- TUTAJ dodajemy jawne SetValue
-
-            -- Ręcznie triggerujemy callback, żeby bossy się załadowały
-            if instanceDD.callbacks and instanceDD.callbacks.OnValueChanged then
-                for _, cb in ipairs(instanceDD.callbacks.OnValueChanged) do
-                    cb.func(instanceDD, "OnValueChanged", firstInst.id)
-                end
-            end
+            instanceDD:SetValue(tostring(firstInst.id)) -- To odpali OnValueChanged
         end
     end)
 
-    instanceDD:SetCallback("OnValueChanged", function(_, _, instID)
-        local numID = tonumber(instID)
-        config.selectedInstance = numID
-
-        local bosses = RaidTrack.GetOfflineBosses(numID)
-        if bosses then
-            for _, b in ipairs(bosses) do
-                config.bosses[b.name] = config.bosses[b.name] or {
-                    Normal = 0,
-                    Heroic = 0,
-                    Mythic = 0
-                }
-            end
-        else
-            RaidTrack.AddDebugMessage("No bosses found for instanceID: " .. tostring(numID))
-        end
+    -- Difficulty Dropdown callback
+    difficultyDD:SetCallback("OnValueChanged", function(_, _, val)
+        config.selectedDifficulty = val
     end)
-
-    C_Timer.After(0.1, function()
-        local expansions = RaidTrack.GetOfflineExpansions()
-        if not expansions or #expansions == 0 then
-            return
-        end
-
-        local firstExpansion = expansions[1]
-        if not firstExpansion then
-            return
-        end
-
-        expansionDD:SetValue(firstExpansion.expansionID)
-        expansionDD:Fire("OnValueChanged", expansionDD, firstExpansion.expansionID)
-
-        C_Timer.After(0.1, function()
-            local instances = RaidTrack.GetOfflineInstances(firstExpansion.expansionID)
-            if not instances or #instances == 0 then
-                return
-            end
-
-            local firstInstance = instances[1]
-            if not firstInstance then
-                return
-            end
-
-            instanceDD:SetValue(firstInstance.id)
-            instanceDD:Fire("OnValueChanged", instanceDD, firstInstance.id)
-            config.selectedInstance = firstInstance.id
-
-            local defaultDiff = "Normal"
-            difficultyDD:SetValue(defaultDiff)
-            difficultyDD:Fire("OnValueChanged", difficultyDD, defaultDiff)
-            config.selectedDifficulty = defaultDiff
-        end)
-    end)
-
-    -- difficultyDD poprawka
-    difficultyDD:SetValue(config.selectedDifficulty)
-    difficultyDD:Fire("OnValueChanged", difficultyDD, config.selectedDifficulty)
 
     local showBossesBtn = AceGUI:Create("Button")
     showBossesBtn:SetText("Show Boss List")
@@ -529,43 +513,49 @@ end
     end)
     frame:AddChild(confirmBtn)
     -- Wymuszenie ustawienia domyślnych wartości dropdownów po pełnym załadowaniu
-C_Timer.After(0.2, function()
-    local expansions = RaidTrack.GetOfflineExpansions()
-    if not expansions or #expansions == 0 then return end
-
-    local firstExp = expansions[1]
-    if not firstExp then return end
-
-    expansionDD:SetValue(firstExp.expansionID)
-    expansionDD:Fire("OnValueChanged", expansionDD, firstExp.expansionID)
-
     C_Timer.After(0.2, function()
+        local expansions = RaidTrack.GetOfflineExpansions()
+        if not expansions or #expansions == 0 then
+            return
+        end
+
+        local firstExp = expansions[1]
+        if not firstExp then
+            return
+        end
+
+        expansionDD:SetValue(firstExp.expansionID)
+
+        -- RĘCZNIE załaduj instancje dla tego expansion
         local instances = RaidTrack.GetOfflineInstances(firstExp.expansionID)
-        if not instances or #instances == 0 then return end
+        if not instances or #instances == 0 then
+            return
+        end
 
         local firstInst = instances[1]
-        if not firstInst then return end
-
-        -- Ręcznie wykonujemy callback
-        if instanceDD.callbacks and instanceDD.callbacks.OnValueChanged then
-            for _, cb in ipairs(instanceDD.callbacks.OnValueChanged) do
-                cb.func(instanceDD, "OnValueChanged", firstInst.id)
-            end
+        if not firstInst then
+            return
         end
+
+        local instMap = {}
+        for _, i in ipairs(instances) do
+            instMap[tostring(i.id)] = i.name
+        end
+        instanceDD:SetList(instMap)
         instanceDD:SetValue(tostring(firstInst.id))
-
-        local defaultDiff = "Normal"
-        difficultyDD:SetValue(defaultDiff)
-        difficultyDD:Fire("OnValueChanged", difficultyDD, defaultDiff)
-
         config.selectedInstance = firstInst.id
-        config.selectedDifficulty = defaultDiff
+
+        -- RĘCZNIE załaduj difficulty dla tej instancji
+        local diffs = GetDifficultiesForInstance(firstInst.id)
+        difficultyDD:SetList(diffs)
+
+        local defaultDiff = next(diffs)
+        if defaultDiff then
+            difficultyDD:SetValue(defaultDiff)
+            config.selectedDifficulty = defaultDiff
+        end
 
         isConfigReady = true
     end)
-end)
-
-
-
 
 end
