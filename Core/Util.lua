@@ -27,7 +27,6 @@ function RaidTrack.SafeDeserialize(str)
     return true, payload
 end
 
-
 -- Debug helper
 function RaidTrack.AddDebugMessage(msg)
     print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
@@ -40,21 +39,22 @@ end
 
 -- Check if player is officer
 function RaidTrack.IsOfficer()
-    if not IsInGuild() then return false end
+    if not IsInGuild() then
+        return false
+    end
     local myName = UnitName("player")
     for i = 1, GetNumGuildMembers() do
-    local name, _, rankIndex = GetGuildRosterInfo(i)
-    -- RaidTrack.AddDebugMessage("Roster: " .. tostring(name) .. " rank " .. tostring(rankIndex))
-    if name and Ambiguate(name, "none") == myName then
-        RaidTrack.AddDebugMessage("Matched player: " .. tostring(name) .. " rank " .. tostring(rankIndex))
-        return rankIndex <= (RaidTrackDB.settings.minSyncRank or 1)
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        -- RaidTrack.AddDebugMessage("Roster: " .. tostring(name) .. " rank " .. tostring(rankIndex))
+        if name and Ambiguate(name, "none") == myName then
+            RaidTrack.AddDebugMessage("Matched player: " .. tostring(name) .. " rank " .. tostring(rankIndex))
+            return rankIndex <= (RaidTrackDB.settings.minSyncRank or 1)
+        end
     end
-end
 
     print(">> Could not find player in guild roster")
     return false
 end
-
 
 -- Status helper
 function RaidTrack.GetSyncStatus()
@@ -67,30 +67,23 @@ function RaidTrack.GetSyncStatus()
 end
 
 function RaidTrack.GetSyncTimeAgo()
-    if not RaidTrack.lastSyncTime then return "never" end
+    if not RaidTrack.lastSyncTime then
+        return "never"
+    end
     local elapsed = time() - RaidTrack.lastSyncTime
     local min = math.floor(elapsed / 60)
     local sec = elapsed % 60
     return string.format("%d min %d sec ago", min, sec)
 end
 function RaidTrack.DebugTableToString(tbl)
-    if type(tbl) ~= "table" then return tostring(tbl) end
+    if type(tbl) ~= "table" then
+        return tostring(tbl)
+    end
     local str = ""
     for k, v in pairs(tbl) do
         str = str .. tostring(k) .. "=" .. tostring(v) .. "; "
     end
     return str
-end
-
--- Funkcja do pobierania EP, GP i PR z bazy
-function GetEPGP(player)
-    -- Pobieramy dane EP i GP z bazy (domyślnie 0, jeśli nie ma danych)
-    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
-    
-    -- Obliczanie PR (Priority Rating) jako EP/GP
-    local pr = epgp.gp > 0 and epgp.ep / epgp.gp or 0
-    
-    return epgp.ep, epgp.gp, pr  -- Zwracamy EP, GP i PR
 end
 
 function RaidTrack.AddLootToLog(player, itemID, gp)
@@ -99,7 +92,7 @@ function RaidTrack.AddLootToLog(player, itemID, gp)
         player = player,
         itemID = itemID,
         gp = gp,
-        timestamp = time()  -- Dodajemy znacznik czasu
+        timestamp = time() -- Dodajemy znacznik czasu
     }
     table.insert(RaidTrackDB.lootHistory, lootEntry)
     RaidTrack.AddDebugMessage("Loot added for " .. player .. ": ItemID " .. itemID .. " with GP " .. gp)
@@ -107,8 +100,11 @@ end
 
 function RaidTrack.AssignPointsToPlayer(player, gp)
     -- Przypisanie punktów GP dla gracza
-    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
-    epgp.gp = epgp.gp + gp  -- Dodajemy GP
+    local epgp = RaidTrackDB.epgp[player] or {
+        ep = 0,
+        gp = 0
+    }
+    epgp.gp = epgp.gp + gp -- Dodajemy GP
     RaidTrackDB.epgp[player] = epgp
     RaidTrack.AddDebugMessage("Assigned " .. gp .. " GP to player " .. player)
 end
@@ -118,9 +114,9 @@ function RaidTrack.GetSelectedItemID()
     local selectedItem = RaidTrack.auctionParticipantWindow.selectedItem -- Zmienna z wybranym przedmiotem w UI
 
     if selectedItem then
-        return selectedItem.itemID  -- Zwracamy itemID wybranego przedmiotu
+        return selectedItem.itemID -- Zwracamy itemID wybranego przedmiotu
     else
-        return nil  -- Jeśli nie ma wybranego przedmiotu
+        return nil -- Jeśli nie ma wybranego przedmiotu
     end
 end
 function RaidTrack.GetEPGP(player)
@@ -128,14 +124,15 @@ function RaidTrack.GetEPGP(player)
     -- Pobierz dane z bazy EPGP lub z innej lokalnej struktury danych
 
     -- Przykład:
-    local playerEP, playerGP = 0, 0  -- Inicjalizacja domyślnych wartości EP i GP
-    local playerPR = 0               -- Inicjalizacja PR (Priority Rating)
-    
+    local playerEP, playerGP = 0, 0 -- Inicjalizacja domyślnych wartości EP i GP
+    local playerPR = 0 -- Inicjalizacja PR (Priority Rating)
+
     -- Znajdź dane dla gracza w bazie danych
     if RaidTrackDB.epgp[player] then
-        playerEP = RaidTrackDB.epgp[player].EP or 0
-        playerGP = RaidTrackDB.epgp[player].GP or 0
-        playerPR = RaidTrackDB.epgp[player].PR or 0
+        playerEP = RaidTrackDB.epgp[player].ep or 0
+        playerGP = RaidTrackDB.epgp[player].gp or 0
+        playerPR = playerGP > 0 and playerEP / playerGP or 0
+
     end
 
     -- Zwracamy dane
@@ -159,8 +156,6 @@ function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, choice)
         RaidTrack.HandleAuctionResponse(payload.auctionID, payload)
     end)
 end
-
-
 
 function RaidTrack.IsLeader()
     local playerName = UnitName("player")
@@ -192,7 +187,6 @@ function RaidTrack.IsPlayerInMyRaid(name)
     return false
 end
 
-
 function RaidTrack.FindItemInBags(itemID)
     for bag = 0, NUM_BAG_SLOTS do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
@@ -206,7 +200,9 @@ function RaidTrack.FindItemInBags(itemID)
 end
 
 function RaidTrack.ApplyHighlight(row, isSelected)
-    if not row or not row.frame then return end
+    if not row or not row.frame then
+        return
+    end
 
     if not row._highlightTexture then
         local tex = row.frame:CreateTexture(nil, "BACKGROUND")
@@ -224,14 +220,17 @@ function RaidTrack.ApplyHighlight(row, isSelected)
 end
 function RaidTrack.GetClassTokenFromLocalized(classLocalized)
     for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do
-        if localized == classLocalized then return token end
+        if localized == classLocalized then
+            return token
+        end
     end
     for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do
-        if localized == classLocalized then return token end
+        if localized == classLocalized then
+            return token
+        end
     end
     return classLocalized
 end
-
 
 -- Tworzy popup frame (raz na start)
 local function CreateEPGPToastFrame()
@@ -249,10 +248,11 @@ local function CreateEPGPToastFrame()
     frame.text:SetText("")
 
     frame:SetScript("OnShow", function(self)
-        C_Timer.After(4, function() self:Hide() end)
+        C_Timer.After(4, function()
+            self:Hide()
+        end)
     end)
 
-    
     return frame
 end
 
@@ -260,35 +260,26 @@ end
 function RaidTrack:ShowEPGPToast(amount, playerName, type)
     if not amount or not playerName or not type then return end
 
-local icon
-local color
-local prefix
+    local icon
+    local color
+    local prefix = (amount >= 0) and "+" or ""
 
-if type == "EP" then
-    icon = 237540 -- Ikona: achievement_pvp_a_13
-    if amount >= 0 then
-        color = "|cff00ff00" -- Zielony dla dodatnich EP
+    if type == "EP" then
+        icon = "Interface\\Icons\\INV_Misc_Coin_01"
+        color = (amount >= 0) and "|cff00ff00" or "|cffff0000"
+    elseif type == "GP" then
+        icon = "Interface\\Icons\\INV_Misc_Coin_01"
+        color = (amount >= 0) and "|cffffcc00" or "|cffff0000"
     else
-        color = "|cffff0000" -- Czerwony dla ujemnych EP
+        icon = "Interface\\Icons\\INV_Misc_QuestionMark"
+        color = "|cffffffff"
     end
-elseif type == "GP" then
-    icon = 136244 -- Ikona: INV_Misc_Coin_01
-    if amount >= 0 then
-        color = "|cffffcc00" -- Złoty dla dodatnich GP
-    else
-        color = "|cffff0000" -- Czerwony dla ujemnych GP
-    end
-end
 
-prefix = (amount >= 0) and "+" or ""  -- dodaj + tylko dla dodatnich
+    -- Zbuduj tekst toastu
+    local text = string.format("%s%s %s -> %s|r", color, type, prefix .. amount, playerName)
 
 
-local iconTag = "|TInterface\\Icons\\Achievement_PVP_A_13:20:20:0:0|t"
-local text = iconTag .. " " .. color .. type .. " +" .. amount .. " -> " .. playerName .. "|r"
-
-
-
-    -- Pokaż ikonowy alert frame (używając AlertFrame systemu)
+    -- Pokaż alert frame
     local frame = RaidTrack.epgpAlertFrame or CreateFrame("Frame", nil, UIParent)
     RaidTrack.epgpAlertFrame = frame
 
@@ -312,41 +303,75 @@ local text = iconTag .. " " .. color .. type .. " +" .. amount .. " -> " .. play
         frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
         frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0)
         frame.text:SetJustifyH("LEFT")
+        frame.text:SetWidth(240)
+        frame.text:SetHeight(40)
     end
 
     frame.icon:SetTexture(icon)
     frame.text:SetText(text)
 
-    -- Pokazujemy przez 5 sek, potem zanik przez 2 sekundy
-frame:SetAlpha(1)
-C_Timer.After(5, function()
-    if frame:IsShown() then
-        UIFrameFadeOut(frame, 2, 1, 0)
-    end
-end)
-
+    frame:SetAlpha(1)
+    C_Timer.After(5, function()
+        if frame:IsShown() then
+            UIFrameFadeOut(frame, 2, 1, 0)
+        end
+    end)
 end
 
 
-function RaidTrack:ShowItemToast(itemID, playerName, epAmount)
-    if not itemID then return end
+function RaidTrack:ShowItemAwardToast(itemID, gpAmount)
+    if not itemID or not gpAmount then return end
 
-    -- Załaduj item (jeśli jeszcze nie w cache)
-    local itemName, itemLink, itemRarity, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
-    if not itemName then
-        -- Item jeszcze nie w cache – spróbuj później
+    local playerName = UnitName("player")
+    local itemName, itemLink, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
+    if not itemLink then
         C_Timer.After(0.5, function()
-            RaidTrack:ShowItemToast(itemID, playerName, epAmount)
+            RaidTrack:ShowItemAwardToast(itemID, gpAmount)
         end)
         return
     end
 
-    -- Zbuduj tekst do pokazania (możesz dostosować)
-    local overrideText = format("EP +%d → %s", epAmount or 0, playerName or "Unknown")
+    local text = string.format("Awarded %s for %d GP", itemLink, gpAmount)
 
-    -- Pokaż loot alert
-    LootWonAlertFrame_ShowAlert(LootWonAlertFrame1, itemLink, 1, true, false, false, false, nil, nil, nil, nil, overrideText)
+    local frame = RaidTrack.awardToastFrame or CreateFrame("Frame", nil, UIParent)
+    RaidTrack.awardToastFrame = frame
+
+    frame:SetSize(320, 64)
+    frame:SetPoint("TOP", UIParent, "TOP", 0, -260)
+    frame:Show()
+
+    if not frame.bg then
+        frame.bg = frame:CreateTexture(nil, "BACKGROUND")
+        frame.bg:SetAllPoints()
+        frame.bg:SetColorTexture(0, 0, 0, 0.8)
+    end
+
+    if not frame.icon then
+        frame.icon = frame:CreateTexture(nil, "ARTWORK")
+        frame.icon:SetSize(40, 40)
+        frame.icon:SetPoint("LEFT", frame, "LEFT", 10, 0)
+    end
+
+    if not frame.text then
+        frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+        frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0)
+        frame.text:SetJustifyH("LEFT")
+        frame.text:SetWidth(250)
+        frame.text:SetHeight(40)
+    end
+
+    frame.icon:SetTexture(itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
+    frame.text:SetText(text)
+
+    frame:SetAlpha(1)
+    C_Timer.After(5, function()
+        if frame:IsShown() then
+            UIFrameFadeOut(frame, 2, 1, 0)
+        end
+    end)
 end
+
+
 
 function RaidTrack.FindExpansionForInstance(instanceID)
     for _, exp in ipairs(RaidTrack.OfflineRaidData or {}) do

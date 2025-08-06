@@ -572,7 +572,7 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
         if item.responses then
             for player, response in pairs(item.responses) do
                 -- Dodanie danych o EP, GP, PR dla gracza do odpowiedzi
-                local ep, gp, pr = GetEPGP(player)
+                local ep, gp, pr = RaidTrack.GetEPGP(player)
                 response.ep = ep
                 response.gp = gp
                 response.pr = pr
