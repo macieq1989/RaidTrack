@@ -383,3 +383,35 @@ function RaidTrack.FindExpansionForInstance(instanceID)
     end
     return nil
 end
+
+function RaidTrack:LoadActiveRaid()
+    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+    for _, raid in ipairs(RaidTrackDB.raidInstances) do
+        if raid.status == "started" then
+            RaidTrack.activeRaidID = raid.id
+            break
+        end
+    end
+end
+function RaidTrack.SaveWindowPosition(name, frame)
+    if not RaidTrackDB.windowPositions then
+        RaidTrackDB.windowPositions = {}
+    end
+    local point, _, relativePoint, xOfs, yOfs = frame.frame:GetPoint()
+    RaidTrackDB.windowPositions[name] = {
+        point = point,
+        relativePoint = relativePoint,
+        x = xOfs,
+        y = yOfs
+    }
+end
+
+function RaidTrack.RestoreWindowPosition(name, frame)
+    if RaidTrackDB.windowPositions and RaidTrackDB.windowPositions[name] then
+        local pos = RaidTrackDB.windowPositions[name]
+        frame.frame:ClearAllPoints()
+        frame.frame:SetPoint(pos.point, UIParent, pos.relativePoint, pos.x, pos.y)
+    else
+        frame.frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    end
+end

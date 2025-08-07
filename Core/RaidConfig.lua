@@ -78,7 +78,8 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName)
         bosses = {},
         players = {},
         epLog = {},
-        loot = {}
+        loot = {},
+        status = "created"
     }
 
     RaidTrackDB.raidHistory[#RaidTrackDB.raidHistory + 1] = raid
@@ -100,16 +101,32 @@ function RaidTrack.EndActiveRaid()
         return
     end
 
-    for _, raid in ipairs(RaidTrackDB.raidHistory or {}) do
+    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+
+    for _, raid in ipairs(RaidTrackDB.raidInstances) do
         if raid.id == RaidTrack.activeRaidID then
-            raid.ended = time()
-            RaidTrack.AddDebugMessage("Ended raid: " .. raid.name)
+            raid.status = "ended"
+            RaidTrack.AddDebugMessage("Ended raid: " .. (raid.name or "Unnamed"))
             break
         end
     end
 
-    RaidTrack.activeRaidID = nil
+   RaidTrack.activeRaidID = nil
+RaidTrackDB.activeRaidID = nil
+
+
+    -- Odśwież UI po zakończeniu
+    
+    RaidTrack.UpdateRaidTabStatus()
+    if RaidTrack.RefreshRaidDropdown then
+    C_Timer.After(0.2, function()
+        RaidTrack.RefreshRaidDropdown()
+    end)
 end
+
+end
+
+
 
 function RaidTrack.RegisterBossKill(bossName)
     if not RaidTrack.activeRaidID then

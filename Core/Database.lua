@@ -16,6 +16,10 @@ RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {
     minimapPos = 220, -- domyślny kąt pozycji wokół minimapy
 }
 
+
+
+
+
 -- Initialize DB on ADDON_LOADED
 local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("ADDON_LOADED")
@@ -29,6 +33,22 @@ initFrame:SetScript("OnEvent", function(self, event, name)
     RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
     RaidTrackDB.lastPayloads = RaidTrackDB.lastPayloads or {}
+
+    -- Przywrócenie aktywnego raidu po restarcie/reloadzie
+-- Odtworzenie activeRaidID z SavedVariables
+if RaidTrackDB and RaidTrackDB.activeRaidID then
+    RaidTrack.activeRaidID = RaidTrackDB.activeRaidID
+
+    -- Debug
+    RaidTrack.AddDebugMessage("Odtworzono activeRaidID = " .. tostring(RaidTrack.activeRaidID))
+
+    -- Opóźniona aktualizacja labela w UI (żeby mieć pewność że UI już istnieje)
+    C_Timer.After(1, function()
+        if RaidTrack.UpdateRaidTabStatus then
+            RaidTrack.UpdateRaidTabStatus()
+        end
+    end)
+end
 
     if RaidTrackDB.settings.minSyncRank == nil then
         RaidTrackDB.settings.minSyncRank = 1
