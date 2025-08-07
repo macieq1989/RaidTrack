@@ -29,10 +29,7 @@ if entry.player == UnitName("player") then
     end
 end
 
-    if msg then
-        RaidTrack:ShowEPGPToast(msg, color)
-    end
-
+    
     if RaidTrackDB.settings.autoSync ~= false then
         RaidTrack.ScheduleSync()
     end
