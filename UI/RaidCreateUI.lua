@@ -75,6 +75,7 @@ end)
         RaidTrack.AddDebugMessage("Raid created: " .. name)
         RaidTrack.RefreshRaidDropdown()
         RaidTrack.UpdateRaidTabStatus()
+        RaidTrack.BroadcastRaidSync()
         frame:Hide()
         RaidTrack.raidCreateWindow = nil
         RaidTrack:OpenRaidCreationWindow()

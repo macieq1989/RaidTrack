@@ -342,7 +342,10 @@ TryRenderBossPanel()
 
         config.minTimeInRaid = config.minTimeInRaid or 60
 
+        
         RaidTrack.SaveRaidPreset(name, config)
+RaidTrack.BroadcastRaidSync()
+
 
         local presets = RaidTrack.GetRaidPresetNames()
         local presetMap = {}
@@ -369,6 +372,8 @@ TryRenderBossPanel()
         end
 
         RaidTrack.DeleteRaidPreset(name)
+RaidTrack.BroadcastRaidSync()
+
 
         local presets = RaidTrack.GetRaidPresetNames()
         local presetMap = {}

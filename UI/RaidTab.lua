@@ -484,6 +484,8 @@ RaidTrackDB.activeRaidID = raidInstance.id
     raidSelectDD:SetValue(raidInstance.id)
     RaidTrack.UpdateRaidTabStatus() -- <- ręczne wywołanie natychmiast
     UpdateRaidList()
+    RaidTrack.BroadcastRaidSync()
+
 
     -- Start odświeżania co sekundę tylko jeśli aktywna zakładka
     if RaidTrack.activeTab == "raidTab" and not RaidTrack._raidTabTicker then
@@ -508,6 +510,8 @@ end)
         RaidTrack.RefreshRaidDropdown()
 
         RaidTrack.UpdateRaidTabStatus()
+        RaidTrack.BroadcastRaidSync()
+
     end)
     controlsScroll:AddChild(endBtn)
 

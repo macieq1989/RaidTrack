@@ -51,6 +51,7 @@ Core/AutoTrade.lua
 Core/OfflineRaidData.lua
 Core/RaidConfig.lua
 Core/BossKill.lua
+Core\RaidSync.lua
 
 
 # --- UI ---

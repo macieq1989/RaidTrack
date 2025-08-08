@@ -1,6 +1,8 @@
 -- Core/Sync.lua
 local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
+RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
+
 
 local CHUNK_SIZE = 200
 local SEND_DELAY = 0.25
@@ -8,24 +10,53 @@ local SYNC_PREFIX = "RaidTrackSync"
 
 C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
 C_ChatInfo.RegisterAddonMessagePrefix("auction")
+C_ChatInfo.RegisterAddonMessagePrefix("RTSYNC")
+
 
 RaidTrack.pendingSends = {}
 RaidTrack.chunkBuffer = {}
 RaidTrack.syncTimer = nil
 
+RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
+
+
+
+
  if not C_ChatInfo.IsAddonMessagePrefixRegistered("auction") then
     C_ChatInfo.RegisterAddonMessagePrefix("auction")
 end
 
-local auctionCommFrame = CreateFrame("Frame")
-auctionCommFrame:RegisterEvent("CHAT_MSG_ADDON")
-auctionCommFrame:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
-    if prefix == "auction" and message:find("^RTCHUNK") then
-        RaidTrack.AddDebugMessage("✅ sender from CHAT_MSG_ADDON: " .. tostring(sender))
-        RaidTrack.HandleChunkedAuctionPiece(sender, message)
+
+
+function RaidTrack.RegisterChunkHandler(prefix, handler)
+    RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
+    RaidTrack.chunkHandlers[prefix] = handler
+end
+
+
+RaidTrack.RegisterChunkHandler("RTSYNC", function(sender, message)
+    RaidTrack.AddDebugMessage("✅ Handler triggered for RTSYNC from: " .. tostring(sender))
+    RaidTrack.HandleChunkedRaidPiece(sender, message)
+end)
+
+
+local genericCommFrame = CreateFrame("Frame")
+genericCommFrame:RegisterEvent("CHAT_MSG_ADDON")
+genericCommFrame:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
+    RaidTrack.AddDebugMessage("💬 genericCommFrame got: " .. tostring(prefix) .. " | " .. tostring(message))
+    if not prefix or not message then return end
+    if RaidTrack.chunkHandlers and RaidTrack.chunkHandlers[prefix] then
+        RaidTrack.chunkHandlers[prefix](sender, message)
     end
 end)
 
+
+
+
+
+RaidTrack.RegisterChunkHandler("auction", function(sender, message)
+    RaidTrack.HandleChunkedAuctionPiece(sender, message)
+end)
 
 function RaidTrack.ScheduleSync()
     RaidTrack.AddDebugMessage("ScheduleSync() called")
@@ -519,20 +550,23 @@ end)
 
 -- Ale jeśli nie masz jej wcale (a była wcześniej), dodaj ją z powrotem:
 
-function RaidTrack.QueueChunkedSend(target, prefix, data)
+function RaidTrack.QueueChunkedSend(target, prefix, data, channelOverride)
+    print("DEBUG: SENDING CHUNK", "prefix:", prefix, "chan:", channelOverride, "target:", tostring(target))
     local chunks = {}
-    local maxSize = 200 -- bezpieczny limit
-
+    local maxSize = 200
     for i = 1, #data, maxSize do
         table.insert(chunks, data:sub(i, i + maxSize - 1))
     end
-
+    local channel = channelOverride or (IsInRaid() and "RAID" or "GUILD")
     for i, chunk in ipairs(chunks) do
         local marker = "RTCHUNK^" .. i .. "^" .. #chunks .. "^" .. chunk
-        local channel = IsInRaid() and "RAID" or "GUILD"
+        print("DEBUG: C_ChatInfo.SendAddonMessage", prefix, marker:sub(1,20), channel, target or "")
         C_ChatInfo.SendAddonMessage(prefix, marker, channel, target or "")
     end
 end
+
+
+
 
 function RaidTrack.QueueAuctionBroadcastSend(prefix, data)
     local chunks = {}
@@ -803,6 +837,50 @@ end
 
 
 
+-- Funkcja obsługująca odebrane chunki RAID SYNC
+function RaidTrack.HandleChunkedRaidPiece(sender, message)
+    if not message:find("^RTCHUNK") then return end
+
+    local parts = { strsplit("^", message) }
+    local _, chunkNum, totalChunks, chunkData = unpack(parts)
+
+    chunkNum = tonumber(chunkNum)
+    totalChunks = tonumber(totalChunks)
+
+    local key = sender .. "_RTSYNC"
+    RaidTrack._chunkBuffers[key] = RaidTrack._chunkBuffers[key] or {}
+    RaidTrack._chunkBuffers[key][chunkNum] = chunkData
+
+    RaidTrack.AddDebugMessage("📥 Chunk " .. chunkNum .. "/" .. totalChunks .. " received from " .. sender)
+
+    -- Sprawdzenie kompletności
+    local buffer = RaidTrack._chunkBuffers[key]
+    local count = 0
+    for i = 1, totalChunks do
+        if buffer[i] then count = count + 1 end
+    end
+
+    if count == totalChunks then
+        RaidTrack.AddDebugMessage("📦 All chunks received from " .. sender)
+        local full = table.concat(buffer, "")
+        RaidTrack._chunkBuffers[key] = nil
+
+        local ok, data = RaidTrack.SafeDeserialize(full)
+        if ok then
+            RaidTrack.AddDebugMessage("✅ Deserialization success from " .. sender)
+            RaidTrack.MergeRaidSyncData(data, sender)
+        else
+            RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. sender)
+            RaidTrack.AddDebugMessage("Deserialize failed: " .. tostring(data))
+            RaidTrack.AddDebugMessage("Attempting to deserialize data: " .. tostring(full))
+        end
+    end
+end
+
+
+
+
+
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
 RaidTrack.AddDebugMessage("✅ sender from CHAT_MSG_ADDON: " .. tostring(sender))
 
@@ -857,4 +935,7 @@ end
     -- Deserializujemy pełne dane
     RaidTrack.ReceiveAuctionChunked(sender, fullData)
 end
+
+
+
 
