@@ -346,8 +346,6 @@ function RaidTrack.RefreshRaidDropdown()
 
     RaidTrack.raidSelectDropdown:SetList(values)
 
-    RaidTrack.AddDebugMessage("RefreshRaidDropdown: loaded " .. tostring(#(RaidTrackDB.raidInstances)) ..
-                                  " total raids (excluding ended)")
 end
 
 function RaidTrack:Render_raidTab(container)

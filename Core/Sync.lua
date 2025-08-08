@@ -35,7 +35,7 @@ end
 
 
 RaidTrack.RegisterChunkHandler("RTSYNC", function(sender, message)
-    RaidTrack.AddDebugMessage("✅ Handler triggered for RTSYNC from: " .. tostring(sender))
+ 
     RaidTrack.HandleChunkedRaidPiece(sender, message)
 end)
 
@@ -43,7 +43,7 @@ end)
 local genericCommFrame = CreateFrame("Frame")
 genericCommFrame:RegisterEvent("CHAT_MSG_ADDON")
 genericCommFrame:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
-    RaidTrack.AddDebugMessage("💬 genericCommFrame got: " .. tostring(prefix) .. " | " .. tostring(message))
+   
     if not prefix or not message then return end
     if RaidTrack.chunkHandlers and RaidTrack.chunkHandlers[prefix] then
         RaidTrack.chunkHandlers[prefix](sender, message)
@@ -59,7 +59,7 @@ RaidTrack.RegisterChunkHandler("auction", function(sender, message)
 end)
 
 function RaidTrack.ScheduleSync()
-    RaidTrack.AddDebugMessage("ScheduleSync() called")
+   
     if RaidTrack.syncTimer then
         RaidTrack.syncTimer:Cancel()
     end
@@ -135,13 +135,13 @@ function RaidTrack.SendSyncData()
     if RaidTrack.HandleSendSync then
         RaidTrack.HandleSendSync()
     else
-        RaidTrack.AddDebugMessage("SendSyncData: Sync system not initialized")
+       
     end
 end
 
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
        if not RaidTrack.IsPlayerInMyGuild(name) then
-        RaidTrack.AddDebugMessage("Blocked sync to non-guild member: " .. tostring(name))
+       
         return
     end
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
@@ -244,7 +244,7 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         }
         local cfgStr = RaidTrack.SafeSerialize(cfgPayload)
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG|" .. cfgStr, "WHISPER", name)
-        RaidTrack.AddDebugMessage("Sent settings to " .. name .. " with sync data.")
+      
     end
 end
 
@@ -261,7 +261,7 @@ function RaidTrack.SendChunkBatch(name)
         end
         RaidTrack.pendingSends[name] = nil
         RaidTrack.lastSyncTime = time()
-        RaidTrack.AddDebugMessage("Empty sync completed with " .. name)
+      
         return
     end
 
@@ -308,7 +308,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         if msg:sub(1, 8) == "RTCHUNK^" then
             RaidTrack.HandleChunkedAuctionPiece(sender, msg)
         else
-            RaidTrack.AddDebugMessage("Ignored non-chunked auction message: " .. msg)
+          
         end
         return
     end
@@ -322,7 +322,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     -- 🔽 Obsługa starego systemu aukcyjnego (prefix RaidTrackSync)
     if msg:sub(1, 13) == "AUCTION_ITEM|" then
         local payload = msg:sub(14)
-        RaidTrack.AddDebugMessage("Payload for AUCTION_ITEM: " .. payload)
+       
 
         local ok, data = RaidTrack.SafeDeserialize(payload)
         if ok and data and data.auctionID and data.item then
@@ -340,7 +340,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
                 responses = {}
             })
 
-            RaidTrack.AddDebugMessage("Received AUCTION_ITEM for auctionID: " .. data.auctionID)
+        
         else
             RaidTrack.AddDebugMessage("Failed to deserialize AUCTION_ITEM")
         end
@@ -352,14 +352,12 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     if msg:sub(1, 14) == "AUCTION_START|" then
         local payload = msg:sub(15)
 
-        -- Logowanie przed deserializacją
-        RaidTrack.AddDebugMessage("Payload for AUCTION_START: " .. payload)
+      
 
         local ok, data = RaidTrack.SafeDeserialize(payload)
 
         -- Logowanie wyników deserializacji
-        RaidTrack.AddDebugMessage("Payload ok: " .. tostring(ok))
-        RaidTrack.AddDebugMessage("Data type: " .. type(data))
+      
 
         if ok and data and data.auctionID then
             C_Timer.After(0.3, function()
@@ -376,7 +374,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     end
 
     if msg == "PING" then
-        RaidTrack.AddDebugMessage("Received PING from " .. who)
+      
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PONG", "WHISPER", who)
         return
     elseif msg == "PONG" and RaidTrack.pendingSends[who] then
@@ -384,10 +382,10 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         RaidTrack.SendChunkBatch(who)
         return
     elseif msg == "PONG" then
-        RaidTrack.AddDebugMessage("Received PONG from " .. who)
+        
         -- No data was pending, but PONG received -> treat as noop sync
         RaidTrack.lastSyncTime = time()
-        RaidTrack.AddDebugMessage("Sync with " .. who .. " completed (no data).")
+     
         return
     elseif msg:sub(1, 9) == "REQ_SYNC|" then
         local _, epStr, lootStr = strsplit("|", msg)
@@ -527,6 +525,9 @@ loginFrame:SetScript("OnEvent", function(_, evt)
             RaidTrack.BroadcastSettings()
         end)
     end
+     if RaidTrack.BroadcastRaidSync then
+                RaidTrack.BroadcastRaidSync()
+            end
 end)
 
 -- Auction chunk handler registration
@@ -551,7 +552,7 @@ end)
 -- Ale jeśli nie masz jej wcale (a była wcześniej), dodaj ją z powrotem:
 
 function RaidTrack.QueueChunkedSend(target, prefix, data, channelOverride)
-    print("DEBUG: SENDING CHUNK", "prefix:", prefix, "chan:", channelOverride, "target:", tostring(target))
+    
     local chunks = {}
     local maxSize = 200
     for i = 1, #data, maxSize do
@@ -560,7 +561,7 @@ function RaidTrack.QueueChunkedSend(target, prefix, data, channelOverride)
     local channel = channelOverride or (IsInRaid() and "RAID" or "GUILD")
     for i, chunk in ipairs(chunks) do
         local marker = "RTCHUNK^" .. i .. "^" .. #chunks .. "^" .. chunk
-        print("DEBUG: C_ChatInfo.SendAddonMessage", prefix, marker:sub(1,20), channel, target or "")
+        
         C_ChatInfo.SendAddonMessage(prefix, marker, channel, target or "")
     end
 end
@@ -585,7 +586,7 @@ end
 function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input)
     -- Debugowanie danych wejściowych
     if type(input) ~= "table" then
-        RaidTrack.AddDebugMessage("Error: input is not a table. Received type: " .. type(input))
+       
         error("QueueAuctionChunkedSend: input must be a table")
     end
 
@@ -624,9 +625,7 @@ function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input
     -- Serializowanie całości na końcu
     local serialized = RaidTrack.SafeSerialize(fullPayload)
 
-    RaidTrack.AddDebugMessage("Sending auction data for auctionID: " .. auctionID)
-    RaidTrack.AddDebugMessage("Subtype: " .. tostring(messageType))
-    RaidTrack.AddDebugMessage("Serialized auction data: " .. tostring(serialized))
+
 
     -- Wywołanie funkcji wysyłania chunków
     RaidTrack.QueueAuctionBroadcastSend("auction", serialized)
@@ -635,22 +634,22 @@ end
 
 function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     if rawData:sub(1, 8) == "RTCHUNK^" then
-        RaidTrack.AddDebugMessage("ERROR: ReceiveAuctionChunked received raw RTCHUNK!")
+      
         return
     end
-    RaidTrack.AddDebugMessage("Raw auction chunk from " .. sender .. ": " .. tostring(rawData))
+  
 
     -- 1. Deserializacja danych
     local ok, data = RaidTrack.SafeDeserialize(rawData)
     if not ok then
-        RaidTrack.AddDebugMessage("Failed to deserialize auction chunk!")
+      
         return
     end
 
-    RaidTrack.AddDebugMessage("ReceiveAuctionChunked: subtype=" .. tostring(data.subtype) .. ", auctionID=" .. tostring(data.auctionID))
+   
 
     if data.type ~= "auction" then
-        RaidTrack.AddDebugMessage("Invalid chunk type: " .. tostring(data.type))
+      
         return
     end
 
@@ -660,7 +659,7 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
     if data.subtype == "item" then
         local itemData = data.payload
         if itemData and itemData.itemID then
-            RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(itemData.itemID))
+         
 
             local itemExists = false
             for _, item in ipairs(RaidTrack.pendingAuctionItems[data.auctionID]) do
@@ -729,7 +728,7 @@ elseif data.subtype == "response" then
     if data.payload then
         local auction = RaidTrack.activeAuctions[data.auctionID]
         if auction and auction.leader and UnitIsUnit("player", auction.leader) then
-            RaidTrack.AddDebugMessage("I'm the leader, handling incoming response.")
+          
             RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
         else
             RaidTrack.AddDebugMessage("Not the leader or auction missing, skipping.")
@@ -757,7 +756,7 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
     end
 
     auctionID = tostring(auctionID) -- zawsze string, bo klucze w activeAuctions są stringami
-    RaidTrack.AddDebugMessage("Handling response for auctionID " .. auctionID)
+  
 
     local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
     local auctionItems = auctionData and auctionData.items
@@ -773,17 +772,13 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
         local itemID = tonumber(item.itemID)
         local responseItemID = tonumber(responseData.itemID)
 
-        RaidTrack.AddDebugMessage("Checking itemID: " .. tostring(itemID) .. " against response itemID: " ..
-                                      tostring(responseItemID))
-
-        if itemID == responseItemID then
+            if itemID == responseItemID then
             matched = true
-            RaidTrack.AddDebugMessage("Matched itemID " .. tostring(itemID) .. " with response itemID " ..
-                                          tostring(responseItemID))
+           
 
             if not item.bids then
                 item.bids = {}
-                RaidTrack.AddDebugMessage("Initialized bids table for itemID " .. tostring(itemID))
+                
             end
 
             local responseExists = false
@@ -791,31 +786,27 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
                 if bid.from == responseData.from then
                     bid.choice = responseData.choice
                     responseExists = true
-                    RaidTrack.AddDebugMessage(
-                        "Updated response from " .. tostring(responseData.from) .. " with choice " ..
-                            tostring(responseData.choice) .. " for itemID " .. tostring(itemID))
+                 
                     break
                 end
             end
 
             if not responseExists and responseData.choice ~= "PASS" then
                 table.insert(item.bids, responseData)
-                RaidTrack.AddDebugMessage("Added response from " .. tostring(responseData.from) .. " with choice " ..
-                                              tostring(responseData.choice) .. " to itemID " .. tostring(itemID))
+               
             elseif responseData.choice == "PASS" then
-                RaidTrack.AddDebugMessage("Player " .. responseData.from .. " passed on itemID " .. tostring(itemID) ..
-                                              ", not adding response.")
+            
             end
 
             if responseData.from == auctionData.leader then
-                RaidTrack.AddDebugMessage("Leader response detected. Updating leader's response window locally.")
+               
                 RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
             end
 
             RaidTrack.UpdateLeaderAuctionUI(auctionID)
 
             RaidTrack.DebugPrintResponses(item)
-            RaidTrack.AddDebugMessage("Total bids for itemID " .. tostring(itemID) .. ": " .. tostring(#item.bids))
+           
             break
         else
             RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " ..
@@ -827,7 +818,7 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
         if RaidTrack.RefreshAuctionLeaderTabs then
             RaidTrack.RefreshAuctionLeaderTabs()
         end
-        RaidTrack.AddDebugMessage("Refreshed tabs after adding response")
+       
     else
         RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " ..
                                       tostring(responseData.itemID))
@@ -851,7 +842,7 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
     RaidTrack._chunkBuffers[key] = RaidTrack._chunkBuffers[key] or {}
     RaidTrack._chunkBuffers[key][chunkNum] = chunkData
 
-    RaidTrack.AddDebugMessage("📥 Chunk " .. chunkNum .. "/" .. totalChunks .. " received from " .. sender)
+  
 
     -- Sprawdzenie kompletności
     local buffer = RaidTrack._chunkBuffers[key]
@@ -861,18 +852,18 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
     end
 
     if count == totalChunks then
-        RaidTrack.AddDebugMessage("📦 All chunks received from " .. sender)
+       
         local full = table.concat(buffer, "")
         RaidTrack._chunkBuffers[key] = nil
 
         local ok, data = RaidTrack.SafeDeserialize(full)
         if ok then
-            RaidTrack.AddDebugMessage("✅ Deserialization success from " .. sender)
+           
             RaidTrack.MergeRaidSyncData(data, sender)
         else
             RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. sender)
             RaidTrack.AddDebugMessage("Deserialize failed: " .. tostring(data))
-            RaidTrack.AddDebugMessage("Attempting to deserialize data: " .. tostring(full))
+            
         end
     end
 end
@@ -882,25 +873,18 @@ end
 
 
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
-RaidTrack.AddDebugMessage("✅ sender from CHAT_MSG_ADDON: " .. tostring(sender))
+
 
   if not sender or sender == "" then
     sender = UnitName("player") -- nadawca lokalny
 end
 
 
-    RaidTrack.AddDebugMessage("Chunk received from: " .. tostring(sender))
-    RaidTrack.AddDebugMessage("UnitInRaid: " .. tostring(UnitInRaid(sender)))
-    RaidTrack.AddDebugMessage("InMyGuild: " ..
-                                  tostring(RaidTrack.IsPlayerInMyGuild and RaidTrack.IsPlayerInMyGuild(sender)))
-
-    -- DEBUG: surowy chunk
-    RaidTrack.AddDebugMessage("Raw auction chunk from: " .. msg)
 
     -- Próba dopasowania chunku
     local index, total, chunk = msg:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
     if not index or not total or not chunk then
-        RaidTrack.AddDebugMessage("Invalid auction chunk format.")
+     
         return
     end
 
@@ -918,7 +902,7 @@ end
 
     -- Przechowywanie chunku
     list[index] = chunk
-    RaidTrack.AddDebugMessage("Received auction chunk " .. index .. "/" .. total .. " from " .. sender)
+  
 
     -- Sprawdzamy, czy otrzymaliśmy wszystkie części
     for i = 1, total do
@@ -930,7 +914,7 @@ end
     -- Łączymy wszystkie części
     local fullData = table.concat(list, "")
     RaidTrack._auctionChunks[sender] = nil
-    RaidTrack.AddDebugMessage("All auction chunks received from " .. sender)
+   
 
     -- Deserializujemy pełne dane
     RaidTrack.ReceiveAuctionChunked(sender, fullData)

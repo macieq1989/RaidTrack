@@ -21,14 +21,7 @@ local AUCTION_TYPES = {
 -- Wysyłanie danych aukcji
 -- Start an auction (only leader/officer)
 function RaidTrack.StartAuction(items, duration)
-    RaidTrack.AddDebugMessage("StartAuction called by: " .. tostring(UnitName("player")) .. " | Officer status: " ..
-                                  tostring(RaidTrack.IsOfficer()))
-    print("=== DEBUG: StartAuction WYWOŁANA ===")
-    RaidTrack.AddDebugMessage("=== DEBUG: StartAuction WYWOŁANA ===")
-    print("Dostałem items: ", items, "liczba:", items and #items or 0)
-    print("duration: ", duration)
-
-    if not RaidTrack.IsOfficer() then
+        if not RaidTrack.IsOfficer() then
         RaidTrack.AddDebugMessage("Only officers can start auctions.")
         return
     end
@@ -144,7 +137,7 @@ function RaidTrack.SendEPGPChanges(changes)
         epgpChanges = changes
     })
 
-    RaidTrack.AddDebugMessage("Serialized EPGP changes: " .. payload)
+    
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, payload, "GUILD")
 end
 
@@ -177,7 +170,7 @@ function RaidTrack.ReceiveAuctionItem(data)
                 link = itemLink,
                 responses = {}
             })
-            RaidTrack.AddDebugMessage("Link do przedmiotu rozwiązany: " .. itemLink)
+           
         elseif attemptsLeft > 0 then
             -- Jeśli link nie został rozwiązany, próbujemy ponownie po 0.5s
             C_Timer.After(0.5, function()
@@ -406,7 +399,7 @@ local function OnOpenAuctionMessageReceived(msg)
 
     local items = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[auctionID]
     if items and #items > 0 then
-        RaidTrack.AddDebugMessage("Opening Auction UI for auctionID: " .. auctionID)
+        
         -- Otwieramy UI z danymi aukcji
         RaidTrack.OpenAuctionParticipantUI({
             auctionID = auctionID,
@@ -441,8 +434,7 @@ function RaidTrack.UpdateLeaderResponseLocally(auctionID, responseData)
             for name, response in pairs(item.responses or {}) do
                 if name == responseData.from then
                     response.choice = responseData.choice
-                    RaidTrack.AddDebugMessage("Updated leader response locally: " .. responseData.choice ..
-                                                  " for itemID " .. tostring(item.itemID))
+                    
                     break
                 end
             end

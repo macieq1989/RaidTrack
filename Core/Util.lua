@@ -11,7 +11,7 @@ function RaidTrack.SafeSerialize(tbl)
 end
 function RaidTrack.SafeDeserialize(str)
     -- Logowanie przed deserializacją
-    RaidTrack.AddDebugMessage("Attempting to deserialize data: " .. tostring(str))
+    
 
     local ok, payload = AceSerializer:Deserialize(str)
 
@@ -21,8 +21,7 @@ function RaidTrack.SafeDeserialize(str)
         return false, nil
     end
 
-    -- Logowanie po pomyślnej deserializacji
-    RaidTrack.AddDebugMessage("Deserialized data successfully: " .. tostring(payload))
+    
 
     return true, payload
 end
@@ -47,7 +46,7 @@ function RaidTrack.IsOfficer()
         local name, _, rankIndex = GetGuildRosterInfo(i)
         -- RaidTrack.AddDebugMessage("Roster: " .. tostring(name) .. " rank " .. tostring(rankIndex))
         if name and Ambiguate(name, "none") == myName then
-            RaidTrack.AddDebugMessage("Matched player: " .. tostring(name) .. " rank " .. tostring(rankIndex))
+           
             return rankIndex <= (RaidTrackDB.settings.minSyncRank or 1)
         end
     end

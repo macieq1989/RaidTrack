@@ -46,7 +46,7 @@ function RaidTrack.SendRaidSyncData()
     }
 
     local serialized = RaidTrack.SafeSerialize(payload)
-    RaidTrack.AddDebugMessage("📨 Broadcasting RTSYNC via " .. (IsInRaid() and "RAID" or "GUILD"))
+    
     RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, IsInRaid() and "RAID" or "GUILD")
 end
 
@@ -55,7 +55,7 @@ end
 -- Funkcja: Broadcast danych do całego raidu
 -----------------------------------------------------
 function RaidTrack.BroadcastRaidSync()
-    RaidTrack.AddDebugMessage("📣 BroadcastRaidSync() wywołany!")
+   
     RaidTrack.SendRaidSyncData()
 end
 
@@ -69,7 +69,7 @@ function RaidTrack.ApplyRaidSyncData(data)
     end
 
     if data.raidSyncID and RaidTrack.lastRaidSyncID and data.raidSyncID == RaidTrack.lastRaidSyncID then
-        RaidTrack.AddDebugMessage("🔁 Duplicate RaidSync ignored.")
+       
         return
     end
 
@@ -96,7 +96,7 @@ function RaidTrack.ApplyRaidSyncData(data)
         RaidTrack.UpdateRaidTabStatus()
     end
 
-    RaidTrack.AddDebugMessage("✅ Applied RaidSync from syncID: " .. tostring(data.raidSyncID))
+  
 end
 
 -----------------------------------------------------
@@ -131,7 +131,7 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
         RaidTrack._chunkBuffers[sender] = nil
         local ok, data = RaidTrack.SafeDeserialize(full)
         if ok then
-            RaidTrack.AddDebugMessage("📡 Received RaidSync from: " .. tostring(sender))
+            
             RaidTrack.ApplyRaidSyncData(data)
         else
             RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. tostring(sender))
@@ -140,13 +140,12 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
 end)
 
 function RaidTrack.MergeRaidSyncData(data, sender)
-    RaidTrack.AddDebugMessage("🔄 MergeRaidSyncData called from " .. tostring(sender))
+    
 
     RaidTrackDB.raidPresets = data.presets or {}
     RaidTrackDB.raidInstances = data.instances or {}
     RaidTrack.activeRaidID = data.activeID
 
-    RaidTrack.AddDebugMessage("✅ RaidSync merged successfully from " .. tostring(sender))
     if RaidTrack.RefreshRaidDropdown then
         RaidTrack.RefreshRaidDropdown()
     end
