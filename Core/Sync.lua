@@ -169,7 +169,8 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
                 epgp = RaidTrackDB.epgp,
                 loot = RaidTrackDB.lootHistory,
                 epgpLog = RaidTrackDB.epgpLog.changes,
-                settings = RaidTrackDB.settings or {}
+                settings = RaidTrackDB.settings or {},
+                epgpWipeID = RaidTrackDB.epgpWipeID
             }
         }
 
