@@ -36,6 +36,36 @@ local CLASS_ICON_TCOORDS = {
 local function GetClassIconTextureCoords(class)
     return unpack(CLASS_ICON_TCOORDS[class or "PRIEST"])
 end
+function RaidTrack.UpdateRaidTabStatus()
+    if not RaidTrack.raidTabStatusLabel then
+        return
+    end
+
+    local id = RaidTrack.activeRaidID
+    if not id then
+        RaidTrack.raidTabStatusLabel:SetText("|cffffccccRaid Status: INACTIVE|r")
+        return
+    end
+
+    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+
+   for _, raid in ipairs(RaidTrackDB.raidInstances) do
+    
+    if tostring(raid.id) == tostring(id) then
+        RaidTrack.activeRaidID = id
+
+        local elapsed = raid.started and SecondsToTime(time() - raid.started) or "N/A"
+        local status = raid.status or "unknown"
+        RaidTrack.raidTabStatusLabel:SetText(string.format("|cffccffccRaid Status: %s - %s [%s]|r",
+            status:upper(), elapsed, raid.name or "Unnamed"))
+        return
+    end
+end
+
+
+    RaidTrack.raidTabStatusLabel:SetText("|cffffccccRaid Status: INACTIVE|r")
+end
+
 
 local function ClearSelection()
     raidTabData.selected = {}
@@ -235,27 +265,28 @@ local function UpdateRaidList()
 
             -- Click handler
             local function CreateRowClickHandler(rowIndex)
-    return function()
-        local data = raidTabData.currentData[rowIndex]
-        if not data then return end
+                return function()
+                    local data = raidTabData.currentData[rowIndex]
+                    if not data then
+                        return
+                    end
 
-        if IsShiftKeyDown() and raidTabData.lastRaidIdx then
-            SetSelectedRange(raidTabData.currentData, raidTabData.lastRaidIdx, rowIndex)
-        elseif IsControlKeyDown() then
-            raidTabData.selected[data.name] = not raidTabData.selected[data.name]
-        else
-            ClearSelection()
-            raidTabData.selected[data.name] = true
-        end
+                    if IsShiftKeyDown() and raidTabData.lastRaidIdx then
+                        SetSelectedRange(raidTabData.currentData, raidTabData.lastRaidIdx, rowIndex)
+                    elseif IsControlKeyDown() then
+                        raidTabData.selected[data.name] = not raidTabData.selected[data.name]
+                    else
+                        ClearSelection()
+                        raidTabData.selected[data.name] = true
+                    end
 
-        raidTabData.lastRaidIdx = rowIndex
+                    raidTabData.lastRaidIdx = rowIndex
 
-        raidTabData.skipRebuild = true
-        UpdateRaidList()
-        raidTabData.skipRebuild = false
-    end
-end
-
+                    raidTabData.skipRebuild = true
+                    UpdateRaidList()
+                    raidTabData.skipRebuild = false
+                end
+            end
 
             row.frame:SetScript("OnMouseDown", CreateRowClickHandler(idx))
 
@@ -296,23 +327,50 @@ function RaidTrack.DeactivateRaidTab()
     ClearSelection()
     raidTabData.lastRaidIdx = nil
 end
+function RaidTrack.RefreshRaidDropdown()
+    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+
+    if not RaidTrack.raidSelectDropdown then
+        RaidTrack.AddDebugMessage("RefreshRaidDropdown: raidSelectDropdown is nil!")
+        return
+    end
+
+    local values = {}
+
+    for _, r in ipairs(RaidTrackDB.raidInstances) do
+        if r.status ~= "ended" then
+            local label = string.format("%s [%s]", r.name or "Unnamed", r.status or "unknown")
+            values[r.id] = label
+        end
+    end
+
+    RaidTrack.raidSelectDropdown:SetList(values)
+
+end
 
 function RaidTrack:Render_raidTab(container)
     container:SetLayout("Fill")
     container:SetFullHeight(true)
+    RaidTrack.activeTab = "raidTab"
+
 
     local mainGroup = AceGUI:Create("SimpleGroup")
     mainGroup:SetFullWidth(true)
     mainGroup:SetFullHeight(true)
-    mainGroup:SetLayout("Flow") -- left and right panels side by side
-    container:AddChild(mainGroup)
+    mainGroup:SetLayout("Fill")
+
+    local rowGroup = AceGUI:Create("SimpleGroup")
+    rowGroup:SetFullWidth(true)
+    rowGroup:SetFullHeight(true)
+    rowGroup:SetLayout("Flow")
+    mainGroup:AddChild(rowGroup)
 
     local leftPanel = AceGUI:Create("InlineGroup")
     leftPanel:SetTitle("Raid Roster")
     leftPanel:SetRelativeWidth(0.68)
     leftPanel:SetFullHeight(true)
     leftPanel:SetLayout("Fill")
-    mainGroup:AddChild(leftPanel)
+    rowGroup:AddChild(leftPanel)
 
     raidTabData.raidScrollContainer = AceGUI:Create("ScrollFrame")
     raidTabData.raidScrollContainer:SetLayout("List")
@@ -324,14 +382,136 @@ function RaidTrack:Render_raidTab(container)
     rightPanel:SetTitle("Controls")
     rightPanel:SetRelativeWidth(0.32)
     rightPanel:SetFullHeight(true)
-    rightPanel:SetLayout("Flow")
-    mainGroup:AddChild(rightPanel)
+    rightPanel:SetLayout("List")
+    rowGroup:AddChild(rightPanel)
 
-    local controlsScroll = AceGUI:Create("ScrollFrame")
-    controlsScroll:SetLayout("List")
+    local controlsScroll = AceGUI:Create("SimpleGroup")
     controlsScroll:SetFullWidth(true)
     controlsScroll:SetFullHeight(true)
+    controlsScroll:SetLayout("List")
     rightPanel:AddChild(controlsScroll)
+
+    container:AddChild(mainGroup)
+
+    -- === RAID CONTROL SECTION ===
+
+    -- STATUS LABEL
+    local statusLabel = AceGUI:Create("Label")
+    statusLabel:SetFullWidth(true)
+    RaidTrack.raidTabStatusLabel = statusLabel
+    controlsScroll:AddChild(statusLabel)
+    
+
+    -- SELECT RAID DROPDOWN
+    local raidSelectDD = AceGUI:Create("Dropdown")
+    raidSelectDD:SetLabel("Select Raid")
+    raidSelectDD:SetFullWidth(true)
+    RaidTrack.raidSelectDropdown = raidSelectDD
+
+    C_Timer.After(0.1, function()
+        if RaidTrack.RefreshRaidDropdown then
+            RaidTrack.RefreshRaidDropdown()
+        end
+    end)
+
+    controlsScroll:AddChild(raidSelectDD)
+
+    -- CREATE RAID BUTTON
+    local createRaidBtn = AceGUI:Create("Button")
+    createRaidBtn:SetText("Create Raid")
+    createRaidBtn:SetFullWidth(true)
+    createRaidBtn:SetCallback("OnClick", function()
+        RaidTrack:OpenRaidCreationWindow() -- lub inna dedykowana funkcja
+    end)
+    controlsScroll:AddChild(createRaidBtn)
+
+    -- CONFIGURE BUTTON
+    local configBtn = AceGUI:Create("Button")
+    configBtn:SetText("Configure Raid")
+    configBtn:SetFullWidth(true)
+    configBtn:SetCallback("OnClick", function()
+        RaidTrack:OpenRaidConfigWindow()
+    end)
+    controlsScroll:AddChild(configBtn)
+
+    -- START RAID BUTTON
+    local startBtn = AceGUI:Create("Button")
+    startBtn:SetText("Start Raid")
+    startBtn:SetFullWidth(true)
+ startBtn:SetCallback("OnClick", function()
+    local selectedRaidID = raidSelectDD:GetValue()
+    if not selectedRaidID then
+        RaidTrack.AddDebugMessage("No raid selected.")
+        return
+    end
+
+    local raidInstance = nil
+    for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
+        if r.id == selectedRaidID then
+            r.status = "started"
+            r.started = time()
+
+            raidInstance = r
+            break
+        end
+    end
+
+    if not raidInstance then
+        RaidTrack.AddDebugMessage("Invalid raid selected.")
+        return
+    end
+
+    -- Ustaw aktywny raid
+    RaidTrack.activeRaidID = raidInstance.id
+    RaidTrackDB.activeRaidID = raidInstance.id
+
+    -- Zapisz stan
+    RaidTrack.AddDebugMessage("Raid started: " .. raidInstance.name .. " [" .. raidInstance.id .. "]")
+
+    -- Strefa
+    local zone = GetRealZoneText() or "Unknown Zone"
+
+    -- Stwórz instancję jeśli trzeba
+    RaidTrack.CreateRaidInstance(raidInstance.name, zone, raidInstance.preset)
+
+    RaidTrack.activeRaidID = raidInstance.id
+RaidTrackDB.activeRaidID = raidInstance.id
+
+       -- Odśwież dropdown, label i lista graczy
+    RaidTrack.RefreshRaidDropdown()
+    raidSelectDD:SetValue(raidInstance.id)
+    RaidTrack.UpdateRaidTabStatus() -- <- ręczne wywołanie natychmiast
+    UpdateRaidList()
+    RaidTrack.BroadcastRaidSync()
+
+
+    -- Start odświeżania co sekundę tylko jeśli aktywna zakładka
+    if RaidTrack.activeTab == "raidTab" and not RaidTrack._raidTabTicker then
+        RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
+            if RaidTrack.activeTab == "raidTab" then
+                RaidTrack.UpdateRaidTabStatus()
+            end
+        end)
+    end
+
+end)
+
+
+    controlsScroll:AddChild(startBtn)
+
+    -- END RAID BUTTON
+    local endBtn = AceGUI:Create("Button")
+    endBtn:SetText("End Raid")
+    endBtn:SetFullWidth(true)
+    endBtn:SetCallback("OnClick", function()
+        RaidTrack.EndActiveRaid()
+        RaidTrack.RefreshRaidDropdown()
+
+        RaidTrack.UpdateRaidTabStatus()
+        RaidTrack.BroadcastRaidSync()
+
+    end)
+    controlsScroll:AddChild(endBtn)
 
     local countLabel = AceGUI:Create("Label")
     countLabel:SetText("Selected: 0 / 0")
@@ -382,5 +562,15 @@ function RaidTrack:Render_raidTab(container)
     applyGroup:AddChild(applyBtn)
 
     UpdateRaidList()
+ if not RaidTrack._raidTabTicker then
+    RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
+        if RaidTrack.activeTab == "raidTab" then
+            RaidTrack.UpdateRaidTabStatus()
+        end
+    end)
+end
+
+
+
 end
 RaidTrack.UpdateRaidList = UpdateRaidList

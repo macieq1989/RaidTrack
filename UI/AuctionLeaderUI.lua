@@ -87,7 +87,7 @@ function RaidTrack:OpenAuctionLeaderUI()
         RaidTrack.AddDebugMessage("Auction Item: " .. auction.itemID .. " Bids: " .. tostring(#auction.bids))
 
         for _, bid in ipairs(auction.bids or {}) do
-            local ep, gp, pr = GetEPGP(bid.from)
+            local ep, gp, pr = RaidTrack.GetEPGP(bid.from)
             local bidLabel = AceGUI:Create("Label")
             bidLabel:SetFullWidth(true)
             bidLabel:SetText(bid.from .. ": " .. bid.response .. " (EP: " .. ep .. ", GP: " .. gp .. ", PR: " ..
@@ -202,7 +202,7 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
         local sortedResponses = {}
         for _, response in ipairs(item.bids or {}) do
             if response.choice ~= "PASS" then
-                local ep, gp, pr = GetEPGP(response.from)
+                local ep, gp, pr = RaidTrack.GetEPGP(response.from)
                 table.insert(sortedResponses, {
                     from = response.from,
                     choice = response.choice,
@@ -320,6 +320,8 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
                     item.assignedTo = player
                     item.awaitingTrade = true
                     item.delivered = false
+                    
+
 
                     RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
                     local lastId = (#RaidTrackDB.lootHistory > 0) and
@@ -335,6 +337,11 @@ function RaidTrack.UpdateLeaderAuctionUI(auctionID)
                     })
 
                     RaidTrack.LogEPGPChange(player, 0, gp, "Auction")
+
+
+
+
+
                     RaidTrack.UpdateLeaderAuctionUI(auctionID)
                 end)
             end

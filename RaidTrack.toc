@@ -47,6 +47,12 @@ Core/Database.lua
 Core/EPGP.lua
 Core/Sync.lua
 Core/Auction.lua
+Core/AutoTrade.lua
+Core/OfflineRaidData.lua
+Core/RaidConfig.lua
+Core/BossKill.lua
+Core\RaidSync.lua
+
 
 # --- UI ---
 UI/MainFrame.lua
@@ -58,4 +64,6 @@ UI/SettingsTab.lua
 UI/GuildTab.lua
 UI/AuctionLeaderUI.lua
 UI\AuctionParticipantUI.lua
-Core/AutoTrade.lua
+UI/RaidConfigUI.lua
+UI\RaidCreateUI.lua
+
