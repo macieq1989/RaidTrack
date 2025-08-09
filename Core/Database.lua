@@ -11,11 +11,19 @@ RaidTrackDB.epgpLog = RaidTrackDB.epgpLog or { changes = {}, lastId = 0 }
 RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
 RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 RaidTrackDB.settings.minSyncRank = RaidTrackDB.settings.minSyncRank or 1
+
+-- Default minimum UI tab access rank (Access Control)
+if type(RaidTrackDB.settings.minUITabRankIndex) ~= "number"
+   or RaidTrackDB.settings.minUITabRankIndex < 1 then
+    RaidTrackDB.settings.minUITabRankIndex = GuildControlGetNumRanks() or 10
+end
+
 RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {
     hide = false,
-    minimapPos = 220, -- domyślny kąt pozycji wokół minimapy
+    minimapPos = 220, -- default minimap position angle
 }
 RaidTrackDB.epgpWipeID = RaidTrackDB.epgpWipeID or tostring(time()..math.random(10000,99999))
+
 
 
 

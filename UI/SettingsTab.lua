@@ -4,6 +4,12 @@ local AceGUI = LibStub("AceGUI-3.0")
 RaidTrack.settingsTabData = RaidTrack.settingsTabData or {}
 
 function RaidTrack:Render_settingsTab(container)
+
+    GameTooltip:Hide()
+    if AceGUI and AceGUI.ClearFocus then
+        AceGUI:ClearFocus()
+    end
+
     container:SetLayout("Fill")
     container:SetFullHeight(true)
 
@@ -18,6 +24,73 @@ function RaidTrack:Render_settingsTab(container)
     topGroup:SetFullWidth(true)
     topGroup:SetLayout("Flow")
     mainGroup:AddChild(topGroup)
+
+    -- Access control (UI gating) — stacked label + dropdown
+    do
+        -- Section header
+        local acTitle = AceGUI:Create("Label")
+        acTitle:SetText("Access control")
+        acTitle:SetFontObject(GameFontHighlightLarge)
+        acTitle:SetFullWidth(true)
+        topGroup:AddChild(acTitle)
+
+        -- Spacer
+        local spacer1 = AceGUI:Create("Label")
+        spacer1:SetText(" ")
+        spacer1:SetFullWidth(true)
+        spacer1:SetHeight(4)
+        topGroup:AddChild(spacer1)
+
+        -- Label for dropdown
+        local acLabel = AceGUI:Create("Label")
+        acLabel:SetText("Minimum guild rank to unlock features")
+        acLabel:SetFullWidth(true)
+        acLabel:SetHeight(20)
+        topGroup:AddChild(acLabel)
+
+        -- Dropdown itself
+        local dd = AceGUI:Create("Dropdown")
+        dd:SetWidth(200)
+        local values, order = RaidTrack.GetGuildRanks()
+        dd:SetList(values, order)
+        dd:SetValue(RaidTrack.GetMinUITabRank())
+
+        dd:SetCallback("OnValueChanged", function(_, _, key)
+            key = tonumber(key)
+            -- (opcjonalnie) tylko oficer może zmieniać
+            if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
+                RaidTrack.AddDebugMessage("Only officers can change access control.")
+                dd:SetValue(RaidTrack.GetMinUITabRank())
+                return
+            end
+
+            RaidTrackDB.settings = RaidTrackDB.settings or {}
+            RaidTrackDB.settings.minUITabRankIndex = key
+
+            if RaidTrack.ApplyUITabVisibility then
+                RaidTrack.ApplyUITabVisibility()
+            end
+            if RaidTrack.RefreshMinimapMenu then
+                RaidTrack.RefreshMinimapMenu()
+            end
+
+            if RaidTrack.BroadcastSettings then
+                RaidTrack.BroadcastSettings()
+            end
+        end)
+
+        topGroup:AddChild(dd)
+
+        RaidTrack.settingsTabData = RaidTrack.settingsTabData or {}
+        RaidTrack.settingsTabData.accessDD = dd
+
+        -- Spacer under control
+        local spacer2 = AceGUI:Create("Label")
+        spacer2:SetText(" ")
+        spacer2:SetFullWidth(true)
+        spacer2:SetHeight(6)
+        topGroup:AddChild(spacer2)
+    end
 
     local title = AceGUI:Create("Label")
     title:SetText("Sync Settings")
@@ -133,27 +206,43 @@ function RaidTrack:Render_settingsTab(container)
     end)
     buttonGroup:AddChild(clearBtn)
 
-    -- SCROLL LOG (no wrapper!)
-    local dbgScroll = AceGUI:Create("ScrollFrame")
-    dbgScroll:SetLayout("Fill")
-    dbgScroll:SetFullWidth(true)
-    dbgScroll:SetFullHeight(true)
-    mainGroup:AddChild(dbgScroll)
+    -- LOG area - full height to the bottom of the window (no extra ScrollFrame)
+    local spacerUnderButtons = AceGUI:Create("Label")
+    spacerUnderButtons:SetText(" ")
+    spacerUnderButtons:SetFullWidth(true)
+    spacerUnderButtons:SetHeight(6)
+    mainGroup:AddChild(spacerUnderButtons)
+
+    local logGroup = AceGUI:Create("SimpleGroup")
+    logGroup:SetFullWidth(true)
+    logGroup:SetFullHeight(true) -- this is key: the last child gets all remaining height
+    logGroup:SetLayout("Fill")
+    mainGroup:AddChild(logGroup)
 
     dbgEdit = AceGUI:Create("MultiLineEditBox")
     dbgEdit:SetLabel("")
     dbgEdit:SetFullWidth(true)
-    dbgEdit:SetFullHeight(true)
+    dbgEdit:SetFullHeight(true) -- expand inside Fill
+
+    -- optional: ensure a reasonable baseline if Fill momentarily fails
+    if dbgEdit.SetNumLines then
+        dbgEdit:SetNumLines(18)
+    end
+
     dbgEdit:SetText(table.concat(RaidTrack.debugMessages or {}, "\n"))
-    dbgEdit:SetCallback("OnEscapePressed", function() dbgEdit:ClearFocus() end)
-    dbgEdit:SetCallback("OnTextChanged", function() dbgEdit:ClearFocus() end)
+    dbgEdit:SetCallback("OnEscapePressed", function()
+        dbgEdit:ClearFocus()
+    end)
+    dbgEdit:SetCallback("OnTextChanged", function()
+        dbgEdit:ClearFocus()
+    end)
     if dbgEdit.editBox and dbgEdit.editBox.SetFontObject then
         dbgEdit.editBox:SetFontObject(GameFontNormal)
     end
     if dbgEdit.button and dbgEdit.button.Hide then
         dbgEdit.button:Hide()
     end
-    dbgScroll:AddChild(dbgEdit)
+    logGroup:AddChild(dbgEdit)
 
     -- Hook aktualizacji loga
     local origAddDebug = RaidTrack.AddDebugMessage
@@ -166,15 +255,37 @@ function RaidTrack:Render_settingsTab(container)
     end
 
     -- Disable if not officer
-    if not RaidTrack.IsOfficer() then
-        officerOnlyCB:Disable()
-        autoSyncCB:Disable()
-        debugCB:Disable()
-        verboseCB:Disable()
-        rankDD:Disable()
-        syncBtn:Disable()
-        clearBtn:Disable()
+    -- Disable if not officer
+    if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
+        if officerOnlyCB and officerOnlyCB.SetDisabled then
+            officerOnlyCB:SetDisabled(true)
+        end
+        if autoSyncCB and autoSyncCB.SetDisabled then
+            autoSyncCB:SetDisabled(true)
+        end
+        if debugCB and debugCB.SetDisabled then
+            debugCB:SetDisabled(true)
+        end
+        if verboseCB and verboseCB.SetDisabled then
+            verboseCB:SetDisabled(true)
+        end
+        if rankDD and rankDD.SetDisabled then
+            rankDD:SetDisabled(true)
+        end
+        if syncBtn and syncBtn.SetDisabled then
+            syncBtn:SetDisabled(true)
+        end
+        if clearBtn and clearBtn.SetDisabled then
+            clearBtn:SetDisabled(true)
+        end
+
+        -- Access Control dropdown (stored earlier)
+        local accessDD = RaidTrack.settingsTabData and RaidTrack.settingsTabData.accessDD
+        if accessDD and accessDD.SetDisabled then
+            accessDD:SetDisabled(true)
+        end
     end
+
 end
 
 function RaidTrack.UpdateSettingsTab()

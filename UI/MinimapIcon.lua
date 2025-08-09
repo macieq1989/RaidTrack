@@ -24,12 +24,14 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
     end,
 
     OnTooltipShow = function(tt)
-        if RaidTrack.menu and RaidTrack.menu:IsShown() then return end -- Don't show tooltip when menu is visible
+        if RaidTrack.menu and RaidTrack.menu:IsShown() then
+            return
+        end -- Don't show tooltip when menu is visible
         tt:AddLine("RaidTrack")
         if RaidTrack.GetSyncTimeAgo then
             tt:AddLine("Last sync: " .. RaidTrack.GetSyncTimeAgo())
         end
-    end,
+    end
 })
 
 function RaidTrack.ShowContextMenu()
@@ -40,8 +42,15 @@ function RaidTrack.ShowContextMenu()
         menu:SetBackdrop({
             bgFile = "Interface/Tooltips/UI-Tooltip-Background",
             edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
-            tile = true, tileSize = 16, edgeSize = 16,
-            insets = { left = 4, right = 4, top = 4, bottom = 4 }
+            tile = true,
+            tileSize = 16,
+            edgeSize = 16,
+            insets = {
+                left = 4,
+                right = 4,
+                top = 4,
+                bottom = 4
+            }
         })
         menu:SetBackdropColor(0, 0, 0, 0.8)
         menu:SetClampedToScreen(true)
@@ -50,59 +59,75 @@ function RaidTrack.ShowContextMenu()
         menu:SetToplevel(true)
 
         local function CreateMenuButton(text, onClick, yOffset)
-    local btn = CreateFrame("Button", nil, menu)
-    btn:SetSize(120, 20)
-    btn:SetPoint("TOP", 0, yOffset)
+            local btn = CreateFrame("Button", nil, menu)
+            btn:SetSize(120, 20)
+            btn:SetPoint("TOP", 0, yOffset)
 
-    local fontString = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    fontString:SetPoint("CENTER")
-    fontString:SetText(text)
-    btn.text = fontString
+            local fontString = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            fontString:SetPoint("CENTER")
+            fontString:SetText(text)
+            btn.text = fontString
 
-    btn:SetScript("OnEnter", function()
-        fontString:SetTextColor(1, 0.8, 0.2)
-    end)
-    btn:SetScript("OnLeave", function()
-        fontString:SetTextColor(1, 1, 1)
-    end)
+            btn:SetScript("OnEnter", function()
+                fontString:SetTextColor(1, 0.8, 0.2)
+            end)
+            btn:SetScript("OnLeave", function()
+                fontString:SetTextColor(1, 1, 1)
+            end)
 
-    btn:SetScript("OnClick", function()
-        menu:Hide()
-        onClick()
-    end)
+            btn:SetScript("OnClick", function()
+                menu:Hide()
+                onClick()
+            end)
 
-    return btn
-end
+            return btn
+        end
 
+        -- Gating po randze gildii: EPGP zawsze, reszta tylko dla uprawnionych
+        local gate = RaidTrack.IsPlayerAllowedByRank and RaidTrack.IsPlayerAllowedByRank()
 
-        CreateMenuButton("Open Window", function()
-            RaidTrack:ToggleMainWindow()
+        local y = -10
+        local function Add(text, func)
+            CreateMenuButton(text, func, y)
+            y = y - 25
+        end
 
-        end, -10)
-
-        CreateMenuButton("Manual Sync", function()
-            local ok, err = pcall(RaidTrack.SendSyncData)
-            if not ok then
-                RaidTrack.AddDebugMessage("Sync error: " .. tostring(err))
+        -- ZAWSZE dostępne: EPGP
+        Add("Open EPGP", function()
+            if RaidTrack.ShowMain then
+                RaidTrack.ShowMain("epgp")
             else
-                RaidTrack.AddDebugMessage("Manual sync triggered.")
+                RaidTrack:ToggleMainWindow()
             end
-        end, -35)
+        end)
 
-   CreateMenuButton("Auction Panel", function()
-    if RaidTrack.OpenAuctionLeaderUI then
-        RaidTrack:OpenAuctionLeaderUI()
-    else
-        RaidTrack.AddDebugMessage("Auction window not available.")
-    end
-end, -60)
+        if gate then
+            Add("Open Window", function()
+                RaidTrack:ToggleMainWindow()
+            end)
 
+            Add("Manual Sync", function()
+                local ok, err = pcall(RaidTrack.SendSyncData)
+                if not ok then
+                    RaidTrack.AddDebugMessage("Sync error: " .. tostring(err))
+                else
+                    RaidTrack.AddDebugMessage("Manual sync triggered.")
+                end
+            end)
 
+            Add("Auction Panel", function()
+                if RaidTrack.OpenAuctionLeaderUI then
+                    RaidTrack:OpenAuctionLeaderUI()
+                else
+                    RaidTrack.AddDebugMessage("Auction window not available.")
+                end
+            end)
+        end
 
-        CreateMenuButton("Hide Icon", function()
+        Add("Hide Icon", function()
             RaidTrackDB.minimap.hide = true
             LibStub("LibDBIcon-1.0"):Hide("RaidTrack")
-        end, -85)
+        end)
 
         -- Hide menu when clicking outside
         local listener = CreateFrame("Frame", nil, UIParent)
@@ -135,7 +160,9 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 frame:SetScript("OnEvent", function(_, _, name)
-    if name ~= addonName then return end
+    if name ~= addonName then
+        return
+    end
     RaidTrackDB.minimap = RaidTrackDB.minimap or {
         minimapPos = 220,
         hide = false

@@ -415,5 +415,41 @@ function RaidTrack.RestoreWindowPosition(name, frame)
     end
 end
 
+-- ==== Guild rank helpers (UI gating) ====
+function RaidTrack.GetGuildRanks()
+    local values, order = {}, {}
+    if IsInGuild() then
+        local num = GuildControlGetNumRanks() or 10
+        for i = 1, num do
+            local name = GuildControlGetRankName(i) or ("Rank "..i)
+            values[i] = string.format("%s (%d)", name, i-1) -- label pokazuje 0-based
+            table.insert(order, i)
+        end
+    end
+    return values, order
+end
+
+-- 1-based indeks rangi gracza (GM = 1); jak brak gildii -> duża liczba
+function RaidTrack.GetPlayerGuildRankIndex1()
+    local rankIndex0 = select(3, GetGuildInfo("player")) -- 0-based
+
+    if rankIndex0 ~= nil then return (rankIndex0 + 1) end
+    return 999
+end
+
+-- odczyt wymaganego progu rangi z settings (domyślnie najniższa = brak ograniczeń)
+function RaidTrack.GetMinUITabRank()
+    RaidTrackDB.settings = RaidTrackDB.settings or {}
+    local num = GuildControlGetNumRanks() or 10
+    local v = RaidTrackDB.settings.minUITabRankIndex or num
+    if type(v) ~= "number" or v < 1 then v = num end
+    return v
+end
+
+-- czy gracz spełnia wymagania rangi
+function RaidTrack.IsPlayerAllowedByRank()
+    return RaidTrack.GetPlayerGuildRankIndex1() <= RaidTrack.GetMinUITabRank()
+end
+
 
 

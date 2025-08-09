@@ -333,3 +333,20 @@ RaidTrack.UpdateGuildList = function()
         RaidTrack.UpdateGuildRoster()
     end
 end
+function RaidTrack.DeactivateGuildTab()
+    -- Close any AceGUI dropdown pullouts created by Guild tab
+    if RaidTrack.guildRankDropdown and RaidTrack.guildRankDropdown.pullout then
+        RaidTrack.guildRankDropdown.pullout:Close()
+    end
+    if RaidTrack.guildFilterDropdown and RaidTrack.guildFilterDropdown.pullout then
+        RaidTrack.guildFilterDropdown.pullout:Close()
+    end
+
+    -- Hide any custom highlight/overlay frames created by Guild tab
+    if RaidTrack.guildHighlightFrame then
+        RaidTrack.guildHighlightFrame:Hide()
+    end
+
+    -- Safety: hide tooltip
+    GameTooltip:Hide()
+end

@@ -290,16 +290,24 @@ function RaidTrack.BroadcastSettings()
     if not RaidTrack.IsOfficer() then
         return
     end
+
+    -- 🔹 natychmiastowe odświeżenie u siebie
+    if RaidTrack.ApplyUITabVisibility then RaidTrack.ApplyUITabVisibility() end
+    if RaidTrack.RefreshMinimapMenu then RaidTrack.RefreshMinimapMenu() end
+
+    -- 🔹 wysyłka do gildii
     local payload = {
         settings = {
             minSyncRank = RaidTrackDB.settings.minSyncRank,
             officerOnly = RaidTrackDB.settings.officerOnly,
-            autoSync = RaidTrackDB.settings.autoSync
+            autoSync = RaidTrackDB.settings.autoSync,
+            minUITabRankIndex  = RaidTrackDB.settings.minUITabRankIndex
         }
     }
     local msg = RaidTrack.SafeSerialize(payload)
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG|" .. msg, "GUILD")
 end
+
 
 local mf = CreateFrame("Frame")
 mf:RegisterEvent("CHAT_MSG_ADDON")
@@ -414,6 +422,9 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             if RaidTrack.UpdateSettingsTab then
                 RaidTrack.UpdateSettingsTab()
             end
+                    if RaidTrack.ApplyUITabVisibility then RaidTrack.ApplyUITabVisibility() end
+        if RaidTrack.RefreshMinimapMenu then RaidTrack.RefreshMinimapMenu() end
+
         end
         return
     end
