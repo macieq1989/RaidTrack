@@ -184,9 +184,9 @@ function RaidTrack.ApplyUITabVisibility()
     tg:SetTabs(fresh)
     if not exists then
         if tg.SelectTab then
-            tg:SelectTab("epgp")
+            tg:SelectTab("epgpTab")
         else
-            if tg.localstatus then tg.localstatus.selected = "epgp" end
+            if tg.localstatus then tg.localstatus.selected = "epgpTab" end
         end
     end
 end

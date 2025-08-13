@@ -328,15 +328,18 @@ function RaidTrack.DeactivateRaidTab()
     raidTabData.lastRaidIdx = nil
 end
 function RaidTrack.RefreshRaidDropdown()
-    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
-
-    if not RaidTrack.raidSelectDropdown then
-        RaidTrack.AddDebugMessage("RefreshRaidDropdown: raidSelectDropdown is nil!")
+    -- Jeśli dropdown nie istnieje lub nie ma pullout, to go pomijamy
+    if not RaidTrack.raidSelectDropdown 
+       or not RaidTrack.raidSelectDropdown.pullout 
+       or not RaidTrack._tabGroup 
+       or (RaidTrack._tabGroup.GetSelectedTab 
+           and RaidTrack._tabGroup:GetSelectedTab() ~= "raidTab") then
         return
     end
 
-    local values = {}
+    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
 
+    local values = {}
     for _, r in ipairs(RaidTrackDB.raidInstances) do
         if r.status ~= "ended" then
             local label = string.format("%s [%s]", r.name or "Unnamed", r.status or "unknown")
@@ -345,8 +348,9 @@ function RaidTrack.RefreshRaidDropdown()
     end
 
     RaidTrack.raidSelectDropdown:SetList(values)
-
 end
+
+
 
 function RaidTrack:Render_raidTab(container)
     container:SetLayout("Fill")
