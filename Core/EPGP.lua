@@ -2,6 +2,8 @@
 local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
 
+
+
 -- Log EPGP change
 function RaidTrack.LogEPGPChange(player, deltaEP, deltaGP, by)
     if not player or (not deltaEP and not deltaGP) then
@@ -19,35 +21,42 @@ function RaidTrack.LogEPGPChange(player, deltaEP, deltaGP, by)
     table.insert(RaidTrackDB.epgpLog.changes, entry)
     RaidTrack.ApplyEPGPChange(entry)
     RaidTrack.AddDebugMessage("Logged change: EP=" .. entry.deltaEP .. ", GP=" .. entry.deltaGP .. " to " .. player)
--- Jeśli zmiana dotyczy mnie – pokaż toast lokalnie
-if entry.player == UnitName("player") then
-    if entry.deltaEP and entry.deltaEP ~= 0 then
-        RaidTrack:ShowEPGPToast(entry.deltaEP, entry.player, "EP")
+    -- Jeśli zmiana dotyczy mnie – pokaż toast lokalnie
+    if entry.player == UnitName("player") then
+        if entry.deltaEP and entry.deltaEP ~= 0 then
+            RaidTrack:ShowEPGPToast(entry.deltaEP, entry.player, "EP")
+        end
+        if entry.deltaGP and entry.deltaGP ~= 0 then
+            RaidTrack:ShowEPGPToast(entry.deltaGP, entry.player, "GP")
+        end
     end
-    if entry.deltaGP and entry.deltaGP ~= 0 then
-        RaidTrack:ShowEPGPToast(entry.deltaGP, entry.player, "GP")
-    end
-end
 
-    
     if RaidTrackDB.settings.autoSync ~= false then
         RaidTrack.ScheduleSync()
     end
 end
 
 -- Apply EPGP change locally
+-- Core/EPGP.lua
 function RaidTrack.ApplyEPGPChange(entry)
     if not entry or not entry.player then
         return
     end
-    local data = RaidTrackDB.epgp[entry.player] or {
-        ep = 0,
-        gp = 0
-    }
-    data.ep = data.ep + entry.deltaEP
-    data.gp = data.gp + entry.deltaGP
-    RaidTrackDB.epgp[entry.player] = data
+
+    -- Minimal GP = 1 (również przy pierwszym wpisie)
+    local st = RaidTrackDB.epgp[entry.player] or { ep = 0, gp = 1 }
+
+    st.ep = (tonumber(st.ep) or 0) + (tonumber(entry.deltaEP) or 0)
+    st.gp = (tonumber(st.gp) or 1) + (tonumber(entry.deltaGP) or 0)
+
+    -- Nigdy poniżej 1
+    if st.gp < 1 then
+        st.gp = 1
+    end
+
+    RaidTrackDB.epgp[entry.player] = st
 end
+
 
 -- Get EPGP changes since a given ID
 function RaidTrack.GetEPGPChangesSince(lastId)

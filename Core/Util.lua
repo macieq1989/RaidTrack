@@ -501,3 +501,21 @@ function RaidTrack.AwardEPToCurrentRaidMembers(amount, reason)
         end
     end
 end
+
+SLASH_RTDEBUG1 = "/rtdebug"
+SlashCmdList["RTDEBUG"] = function(msg)
+    RaidTrackDB = RaidTrackDB or {}
+    RaidTrackDB.settings = RaidTrackDB.settings or {}
+    msg = tostring(msg or ""):lower():gsub("%s+", "")
+
+    if msg == "on" or msg == "1" or msg == "true" then
+        RaidTrackDB.settings.debugToChat = true
+        print("|cff00ffff[RaidTrack]|r Debug echo to chat: |cff00ff00ON|r")
+    elseif msg == "off" or msg == "0" or msg == "false" or msg == "" then
+        RaidTrackDB.settings.debugToChat = false
+        print("|cff00ffff[RaidTrack]|r Debug echo to chat: |cffff0000OFF|r")
+    else
+        local cur = RaidTrackDB.settings.debugToChat and "|cff00ff00ON|r" or "|cffff0000OFF|r"
+        print("|cff00ffff[RaidTrack]|r Usage: /rtdebug [on|off]  (current: " .. cur .. ")")
+    end
+end
