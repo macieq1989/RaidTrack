@@ -1,6 +1,40 @@
 local addonName, RaidTrack = ...
 local AceGUI = LibStub("AceGUI-3.0")
 
+-- Ensure boss tables have keys for the actual difficulties of the selected instance
+local function EnsureBossDifficultyKeys(config, instID)
+    if not instID then
+        return
+    end
+    local instance = RaidTrack.FindOfflineInstanceByID(instID)
+    if not instance or not instance.difficulties then
+        return
+    end
+
+    local diffs = {}
+    for _, d in ipairs(instance.difficulties) do
+        diffs[d] = true -- e.g., "25 Player", "40 Player", "Normal", "Heroic", "Mythic", "LFR"
+    end
+
+    -- Migrate existing bosses to contain ALL difficulty keys for this instance
+    config.bosses = config.bosses or {}
+    for bossName, tab in pairs(config.bosses) do
+        tab = tab or {}
+        for k in pairs(diffs) do
+            if tab[k] == nil then
+                tab[k] = 0
+            end
+        end
+        -- opcjonalnie: usuń klucze trudności, które nie należą do tej instancji
+        for k in pairs(tab) do
+            if not diffs[k] then
+                tab[k] = nil
+            end
+        end
+        config.bosses[bossName] = tab
+    end
+end
+
 function RaidTrack:OpenRaidConfigWindow()
     local bossPanel -- placeholder na dynamiczny panel z listą bossów
     local isConfigReady = false
@@ -173,23 +207,17 @@ function RaidTrack:OpenRaidConfigWindow()
 
         if bosses then
             for _, b in ipairs(bosses) do
-                config.bosses[b.name] = config.bosses[b.name] or {
-                    Normal = 0,
-                    Heroic = 0,
-                    Mythic = 0
-                }
+                config.bosses[b.name] = config.bosses[b.name] or {}
             end
+            EnsureBossDifficultyKeys(config, config.selectedInstance)
         end
 
         for _, b in ipairs(bosses or {}) do
 
             local bossName = b.name
             local diff = config.selectedDifficulty
-            config.bosses[bossName] = config.bosses[bossName] or {
-                Normal = 0,
-                Heroic = 0,
-                Mythic = 0
-            }
+            config.bosses[bossName] = config.bosses[bossName] or {}
+            EnsureBossDifficultyKeys(config, config.selectedInstance)
 
             local epValue = config.bosses[bossName][diff] or 0
 
@@ -235,88 +263,91 @@ function RaidTrack:OpenRaidConfigWindow()
     end
 
     RaidTrack.raidPresetDropdown:SetCallback("OnValueChanged", function(_, _, val)
-        if not flaskCB or not onTimeBox then
-            C_Timer.After(0.1, function()
-                RaidTrack.raidPresetDropdown:Fire("OnValueChanged", nil, val)
-            end)
-            return
+    if not flaskCB or not onTimeBox then
+        C_Timer.After(0.1, function()
+            RaidTrack.raidPresetDropdown:Fire("OnValueChanged", nil, val)
+        end)
+        return
+    end
+
+    local preset = RaidTrack.GetRaidPresets()[val]
+    if not preset then
+        return
+    end
+
+    -- odtwarzamy config z presetu
+    config = preset
+    config.selectedDifficulty = config.selectedDifficulty or "Normal"
+    config.selectedInstance  = config.selectedInstance or nil
+    config.minTimeInRaid     = config.minTimeInRaid or 15
+    config.bosses            = config.bosses or {}
+
+    -- odtwórz checkboxy / pola
+    flaskCB:SetValue(config.requirements and config.requirements.flask or false)
+    enchantsCB:SetValue(config.requirements and config.requirements.enchants or false)
+    autoPassCB:SetValue(config.autoPass == nil and true or config.autoPass)
+
+    onTimeBox:SetText(tostring(config.awardEP and config.awardEP.onTime or 0))
+    bossKillBox:SetText(tostring(config.awardEP and config.awardEP.bossKill or 0))
+    fullAttBox:SetText(tostring(config.awardEP and config.awardEP.fullAttendance or 0))
+    minTimeBox:SetText(tostring(config.minTimeInRaid or 0))
+
+    -- zresetuj listy
+    expansionDD:SetList({ [""] = "Select Expansion..." }); expansionDD:SetValue("")
+    instanceDD:SetList({ [""] = "Select Raid Instance..." }); instanceDD:SetValue("")
+    difficultyDD:SetList({ [""] = "Select Difficulty..." }); difficultyDD:SetValue("")
+
+    -- ustaw Expansion -> Instance -> Difficulty zgodnie z presetem
+    local expansionID = RaidTrack.FindExpansionForInstance(config.selectedInstance)
+    if not expansionID then
+        -- jeżeli preset nie ma instancji, kończymy
+        return
+    end
+
+    -- Expansion
+    local expansions = RaidTrack.GetOfflineExpansions()
+    local expMap = { [""] = "Select Expansion..." }
+    for _, e in ipairs(expansions or {}) do expMap[e.expansionID] = e.name end
+    expansionDD:SetList(expMap)
+    expansionDD:SetValue(expansionID)
+    expansionDD:Fire("OnValueChanged", expansionDD, expansionID)
+
+    -- Instance
+    local instances = RaidTrack.GetOfflineInstances(expansionID)
+    local instMap = { [""] = "Select Raid Instance..." }
+    for _, i in ipairs(instances or {}) do instMap[tostring(i.id)] = i.name end
+    instanceDD:SetList(instMap)
+    local instanceID = tostring(config.selectedInstance)
+    if instMap[instanceID] then
+        instanceDD:SetValue(instanceID)
+        instanceDD:Fire("OnValueChanged", instanceDD, instanceID)
+    end
+
+    -- Difficulty
+    local diffs = (function()
+        local t = {}
+        local inst = RaidTrack.FindOfflineInstanceByID(config.selectedInstance)
+        if inst and inst.difficulties then
+            for _, d in ipairs(inst.difficulties) do t[d] = d end
         end
+        return t
+    end)()
+    local diffMap = { [""] = "Select Difficulty..." }
+    for k, v in pairs(diffs) do diffMap[k] = v end
+    difficultyDD:SetList(diffMap)
+    local diff = config.selectedDifficulty or ""
+    if diffMap[diff] then
+        difficultyDD:SetValue(diff)
+        difficultyDD:Fire("OnValueChanged", difficultyDD, diff)
+    end
 
-        local preset = RaidTrack.GetRaidPresets()[val]
-        if not preset then
-            return
-        end
+    -- 🔴 TU DOKŁADNIE: uzupełnij/napraw klucze trudności dla bossów z tego presetu
+    EnsureBossDifficultyKeys(config, config.selectedInstance)
 
-        config = preset
-        config.selectedDifficulty = config.selectedDifficulty or "Normal"
-        config.selectedInstance = config.selectedInstance or nil
-        config.minTimeInRaid = config.minTimeInRaid or 15
+    -- odśwież panel bossów
+    TryRenderBossPanel()
+end)
 
-        -- Odtwórz checkboxy
-        flaskCB:SetValue(config.requirements.flask)
-        enchantsCB:SetValue(config.requirements.enchants)
-        autoPassCB:SetValue(config.autoPass)
-
-        -- Odtwórz pola EP
-        onTimeBox:SetText(tostring(config.awardEP.onTime))
-        bossKillBox:SetText(tostring(config.awardEP.bossKill))
-        fullAttBox:SetText(tostring(config.awardEP.fullAttendance))
-        minTimeBox:SetText(tostring(config.minTimeInRaid))
-
-      -- RESETUJ dropdowny na "Select"
-expansionDD:SetList({ [""] = "Select Expansion..." })
-expansionDD:SetValue("")
-
-instanceDD:SetList({ [""] = "Select Raid Instance..." })
-instanceDD:SetValue("")
-
-difficultyDD:SetList({ [""] = "Select Difficulty..." })
-difficultyDD:SetValue("")
-
--- Expansion
-local expansionID = RaidTrack.FindExpansionForInstance(config.selectedInstance)
-if not expansionID then return end
-
--- Załaduj expansion
-local expansions = RaidTrack.GetOfflineExpansions()
-local expMap = { [""] = "Select Expansion..." }
-for _, e in ipairs(expansions) do
-    expMap[e.expansionID] = e.name
-end
-expansionDD:SetList(expMap)
-expansionDD:SetValue(expansionID)
-expansionDD:Fire("OnValueChanged", expansionDD, expansionID)
-
--- Instance
-local instances = RaidTrack.GetOfflineInstances(expansionID)
-local instMap = { [""] = "Select Raid Instance..." }
-for _, i in ipairs(instances or {}) do
-    instMap[tostring(i.id)] = i.name
-end
-instanceDD:SetList(instMap)
-local instanceID = tostring(config.selectedInstance)
-if instMap[instanceID] then
-    instanceDD:SetValue(instanceID)
-    instanceDD:Fire("OnValueChanged", instanceDD, instanceID)
-end
-
--- Difficulty
-local diffs = GetDifficultiesForInstance(config.selectedInstance)
-local diffMap = { [""] = "Select Difficulty..." }
-for k, v in pairs(diffs) do
-    diffMap[k] = v
-end
-difficultyDD:SetList(diffMap)
-local diff = config.selectedDifficulty or ""
-if diffMap[diff] then
-    difficultyDD:SetValue(diff)
-    difficultyDD:Fire("OnValueChanged", difficultyDD, diff)
-end
-
--- Render bossów
-TryRenderBossPanel()
-
-    end)
 
     leftPanel:AddChild(RaidTrack.raidPresetDropdown)
 
@@ -342,9 +373,13 @@ TryRenderBossPanel()
 
         config.minTimeInRaid = config.minTimeInRaid or 60
 
-        
         RaidTrack.SaveRaidPreset(name, config)
-RaidTrack.BroadcastRaidSync()
+        RaidTrack.BroadcastRaidSync()
+
+        -- po RaidTrack.BroadcastRaidSync() w Save Preset:
+if RaidTrack.RefreshCreateRaidPresetDropdown then
+    RaidTrack.RefreshCreateRaidPresetDropdown()
+end
 
 
         local presets = RaidTrack.GetRaidPresetNames()
@@ -372,7 +407,12 @@ RaidTrack.BroadcastRaidSync()
         end
 
         RaidTrack.DeleteRaidPreset(name)
-RaidTrack.BroadcastRaidSync()
+        RaidTrack.BroadcastRaidSync()
+
+        -- po RaidTrack.BroadcastRaidSync() w Delete Preset:
+if RaidTrack.RefreshCreateRaidPresetDropdown then
+    RaidTrack.RefreshCreateRaidPresetDropdown()
+end
 
 
         local presets = RaidTrack.GetRaidPresetNames()
@@ -404,40 +444,41 @@ RaidTrack.BroadcastRaidSync()
     instanceDD:SetFullWidth(true)
 
     -- Instance Dropdown
-  instanceDD:SetCallback("OnValueChanged", function(_, _, instID)
-    if instID == "" then
-        difficultyDD:SetList({ [""] = "Select Difficulty..." })
-        difficultyDD:SetValue("")
-        config.selectedInstance = nil
-        config.selectedDifficulty = nil
-        return
-    end
-
-    local numID = tonumber(instID)
-    config.selectedInstance = numID
-
-    -- Boss init (opcjonalnie)
-    local bosses = RaidTrack.GetOfflineBosses(numID)
-    if bosses then
-        for _, b in ipairs(bosses) do
-            config.bosses[b.name] = config.bosses[b.name] or {
-                Normal = 0,
-                Heroic = 0,
-                Mythic = 0
-            }
+    instanceDD:SetCallback("OnValueChanged", function(_, _, instID)
+        if instID == "" then
+            difficultyDD:SetList({
+                [""] = "Select Difficulty..."
+            })
+            difficultyDD:SetValue("")
+            config.selectedInstance = nil
+            config.selectedDifficulty = nil
+            return
         end
-    end
 
-    -- Difficulty
-    local diffs = GetDifficultiesForInstance(numID)
-    local diffMap = { [""] = "Select Difficulty..." }
-    for k, v in pairs(diffs) do
-        diffMap[k] = v
-    end
-    difficultyDD:SetList(diffMap)
-    difficultyDD:SetValue("")
-end)
+        local numID = tonumber(instID)
+        config.selectedInstance = numID
 
+        -- Boss init (opcjonalnie)
+        local bosses = RaidTrack.GetOfflineBosses(numID)
+        if bosses then
+    for _, b in ipairs(bosses) do
+        config.bosses[b.name] = config.bosses[b.name] or {}
+    end
+    EnsureBossDifficultyKeys(config, tonumber(instID))
+end
+
+
+        -- Difficulty
+        local diffs = GetDifficultiesForInstance(numID)
+        local diffMap = {
+            [""] = "Select Difficulty..."
+        }
+        for k, v in pairs(diffs) do
+            diffMap[k] = v
+        end
+        difficultyDD:SetList(diffMap)
+        difficultyDD:SetValue("")
+    end)
 
     rightPanel:AddChild(instanceDD)
 
@@ -465,48 +506,56 @@ end)
 
     -- Expansion Dropdown
     expansionDD:SetCallback("OnValueChanged", function(_, _, expID)
-    if expID == "" then
-        instanceDD:SetList({ [""] = "Select Raid Instance..." })
+        if expID == "" then
+            instanceDD:SetList({
+                [""] = "Select Raid Instance..."
+            })
+            instanceDD:SetValue("")
+            difficultyDD:SetList({
+                [""] = "Select Difficulty..."
+            })
+            difficultyDD:SetValue("")
+            config.selectedInstance = nil
+            config.selectedDifficulty = nil
+            return
+        end
+
+        local numID = tonumber(expID)
+        local instances = RaidTrack.GetOfflineInstances(numID)
+        if not instances or #instances == 0 then
+            instanceDD:SetList({
+                [""] = "Select Raid Instance..."
+            })
+            instanceDD:SetValue("")
+            config.selectedInstance = nil
+            config.selectedDifficulty = nil
+            return
+        end
+
+        local instMap = {
+            [""] = "Select Raid Instance..."
+        }
+        for _, i in ipairs(instances) do
+            instMap[tostring(i.id)] = i.name
+        end
+        instanceDD:SetList(instMap)
         instanceDD:SetValue("")
-        difficultyDD:SetList({ [""] = "Select Difficulty..." })
+        difficultyDD:SetList({
+            [""] = "Select Difficulty..."
+        })
         difficultyDD:SetValue("")
         config.selectedInstance = nil
         config.selectedDifficulty = nil
-        return
-    end
-
-    local numID = tonumber(expID)
-    local instances = RaidTrack.GetOfflineInstances(numID)
-    if not instances or #instances == 0 then
-        instanceDD:SetList({ [""] = "Select Raid Instance..." })
-        instanceDD:SetValue("")
-        config.selectedInstance = nil
-        config.selectedDifficulty = nil
-        return
-    end
-
-    local instMap = { [""] = "Select Raid Instance..." }
-    for _, i in ipairs(instances) do
-        instMap[tostring(i.id)] = i.name
-    end
-    instanceDD:SetList(instMap)
-    instanceDD:SetValue("")
-    difficultyDD:SetList({ [""] = "Select Difficulty..." })
-    difficultyDD:SetValue("")
-    config.selectedInstance = nil
-    config.selectedDifficulty = nil
-end)
-
+    end)
 
     -- Difficulty Dropdown callback
-   difficultyDD:SetCallback("OnValueChanged", function(_, _, val)
-    if val == "" then
-        config.selectedDifficulty = nil
-    else
-        config.selectedDifficulty = val
-    end
-end)
-
+    difficultyDD:SetCallback("OnValueChanged", function(_, _, val)
+        if val == "" then
+            config.selectedDifficulty = nil
+        else
+            config.selectedDifficulty = val
+        end
+    end)
 
     local showBossesBtn = AceGUI:Create("Button")
     showBossesBtn:SetText("Show Boss List")
@@ -564,25 +613,32 @@ end)
     end)
     frame:AddChild(confirmBtn)
     -- Wymuszenie ustawienia domyślnych wartości dropdownów po pełnym załadowaniu
-   C_Timer.After(0.2, function()
-    local expansions = RaidTrack.GetOfflineExpansions()
-    if not expansions or #expansions == 0 then return end
+    C_Timer.After(0.2, function()
+        local expansions = RaidTrack.GetOfflineExpansions()
+        if not expansions or #expansions == 0 then
+            return
+        end
 
-    local expMap = { [""] = "Select Expansion..." }
-    for _, e in ipairs(expansions) do
-        expMap[e.expansionID] = e.name
-    end
-    expansionDD:SetList(expMap)
-    expansionDD:SetValue("") -- default "Select"
+        local expMap = {
+            [""] = "Select Expansion..."
+        }
+        for _, e in ipairs(expansions) do
+            expMap[e.expansionID] = e.name
+        end
+        expansionDD:SetList(expMap)
+        expansionDD:SetValue("") -- default "Select"
 
-    instanceDD:SetList({ [""] = "Select Raid Instance..." })
-    instanceDD:SetValue("")
+        instanceDD:SetList({
+            [""] = "Select Raid Instance..."
+        })
+        instanceDD:SetValue("")
 
-    difficultyDD:SetList({ [""] = "Select Difficulty..." })
-    difficultyDD:SetValue("")
+        difficultyDD:SetList({
+            [""] = "Select Difficulty..."
+        })
+        difficultyDD:SetValue("")
 
-    isConfigReady = true
-end)
-
+        isConfigReady = true
+    end)
 
 end

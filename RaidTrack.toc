@@ -52,6 +52,7 @@ Core/OfflineRaidData.lua
 Core/RaidConfig.lua
 Core/BossKill.lua
 Core\RaidSync.lua
+Core\AutoPass.lua
 
 
 # --- UI ---

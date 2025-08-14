@@ -4,7 +4,6 @@ RaidTrack = RaidTrack or {}
 RaidTrackDB = RaidTrackDB or {}
 RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
 
-
 -- Zapisuje preset pod daną nazwą
 function RaidTrack.SaveRaidPreset(name, config)
     RaidTrackDB = RaidTrackDB or {}
@@ -51,20 +50,18 @@ function RaidTrack.LoadRaidPreset(name, callback)
 end
 
 -- Tworzy instancję nowego raidu na podstawie wybranego presetu
-function RaidTrack.CreateRaidInstance(name, zone, presetName)
+function RaidTrack.CreateRaidInstance(name, zone, presetName, forcedId)
     if not name or not zone then
         RaidTrack.AddDebugMessage("CreateRaidInstance: missing name or zone")
         return
     end
-
     local preset = RaidTrackDB.raidPresets[presetName]
     if not preset then
         RaidTrack.AddDebugMessage("CreateRaidInstance: preset not found: " .. tostring(presetName))
         return
     end
-
     RaidTrackDB.raidHistory = RaidTrackDB.raidHistory or {}
-    local id = time()
+    local id = forcedId or time()
 
     local raid = {
         id = id,
@@ -74,22 +71,23 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName)
         started = time(),
         ended = nil,
         presetName = presetName,
-        settings = CopyTable(preset), -- zachowujemy oryginalne ustawienia
+        settings = CopyTable(preset),
         bosses = {},
         players = {},
         epLog = {},
         loot = {},
-        status = "created"
+        flags = {},
+        status = "started"
     }
 
-    RaidTrackDB.raidHistory[#RaidTrackDB.raidHistory + 1] = raid
+    table.insert(RaidTrackDB.raidHistory, raid)
     RaidTrack.activeRaidID = id
+    RaidTrackDB.activeRaidID = id
 
-    -- zapisz aktualny skład raidu
     for i = 1, GetNumGroupMembers() do
-        local name = GetRaidRosterInfo(i)
-        if name then
-            table.insert(raid.players, name)
+        local nm = GetRaidRosterInfo(i)
+        if nm then
+            table.insert(raid.players, nm)
         end
     end
 
@@ -97,35 +95,51 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName)
 end
 
 function RaidTrack.EndActiveRaid()
-    if not RaidTrack.activeRaidID then
+    local id = RaidTrack.activeRaidID
+    if not id then
+        RaidTrack.AddDebugMessage("No active raid to end.")
         return
     end
 
-    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+    -- Full Attendance (before we clear active)
+    if RaidTrack.AwardFullAttendanceIfNeededAtEnd then
+        RaidTrack.AwardFullAttendanceIfNeededAtEnd()
+    end
 
-    for _, raid in ipairs(RaidTrackDB.raidInstances) do
-        if raid.id == RaidTrack.activeRaidID then
-            raid.status = "ended"
-            RaidTrack.AddDebugMessage("Ended raid: " .. (raid.name or "Unnamed"))
-            break
+    -- Mark 'ended' in raidInstances
+    if RaidTrackDB and RaidTrackDB.raidInstances then
+        for _, r in ipairs(RaidTrackDB.raidInstances) do
+            if tostring(r.id) == tostring(id) then
+                r.status = "ended"
+                r.ended  = time()
+                break
+            end
         end
     end
 
-   RaidTrack.activeRaidID = nil
-RaidTrackDB.activeRaidID = nil
+    -- Mark 'ended' in raidHistory
+    if RaidTrackDB and RaidTrackDB.raidHistory then
+        for _, h in ipairs(RaidTrackDB.raidHistory) do
+            if tostring(h.id) == tostring(id) then
+                h.status = "ended"
+                h.ended  = time()
+                break
+            end
+        end
+    end
 
+    RaidTrack.activeRaidID      = nil
+    RaidTrackDB.activeRaidID    = nil
+    RaidTrack.currentRaidConfig = nil
 
-    -- Odśwież UI po zakończeniu
-    
-    RaidTrack.UpdateRaidTabStatus()
-    if RaidTrack.RefreshRaidDropdown then
-    C_Timer.After(0.2, function()
-        RaidTrack.RefreshRaidDropdown()
-    end)
+    if RaidTrack.AddDebugMessage then
+        RaidTrack.AddDebugMessage("Raid ended: " .. tostring(id))
+    end
+
+    if RaidTrack.RefreshRaidDropdown then RaidTrack.RefreshRaidDropdown() end
+    if RaidTrack.UpdateRaidTabStatus then RaidTrack.UpdateRaidTabStatus() end
+    if RaidTrack.BroadcastRaidSync then RaidTrack.BroadcastRaidSync() end
 end
-
-end
-
 
 
 function RaidTrack.RegisterBossKill(bossName)
@@ -194,5 +208,63 @@ function RaidTrack.GetRaidPresetNames()
     return names
 end
 
+-- One-time On-Time award (RL only)
+function RaidTrack.AwardOnTimeIfNeeded()
+    if not (RaidTrack.IsRaidLeader and RaidTrack.IsRaidLeader()) then
+        return
+    end
+    local raid = RaidTrack.GetActiveRaidEntry and RaidTrack.GetActiveRaidEntry()
+    if not raid then
+        return
+    end
+    raid.flags = raid.flags or {}
+    if raid.flags.onTimeAwarded then
+        return
+    end
 
+    local cfg = RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig() or nil
+    local amt = cfg and cfg.awardEP and tonumber(cfg.awardEP.onTime) or 0
+    if amt and amt > 0 then
+        RaidTrack.AwardEPToCurrentRaidMembers(amt, "On-Time Bonus")
+        raid.flags.onTimeAwarded = true
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage(("On-Time awarded: EP=%s"):format(tostring(amt)))
+        end
+    end
+end
+
+-- One-time Full Attendance at raid end (RL only)
+function RaidTrack.AwardFullAttendanceIfNeededAtEnd()
+    if not (RaidTrack.IsRaidLeader and RaidTrack.IsRaidLeader()) then
+        return
+    end
+    local raid = RaidTrack.GetActiveRaidEntry and RaidTrack.GetActiveRaidEntry()
+    if not raid then
+        return
+    end
+    raid.flags = raid.flags or {}
+    if raid.flags.fullAttendanceAwarded then
+        return
+    end
+
+    local cfg = RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig() or nil
+    local amt = cfg and cfg.awardEP and tonumber(cfg.awardEP.fullAttendance) or 0
+    local minMin = cfg and tonumber(cfg.minTimeInRaid) or 0
+
+    -- check minimum time in raid
+    local started = tonumber(raid.started) or 0
+    local okTime = (started > 0) and (time() - started >= (minMin * 60))
+
+    if amt and amt > 0 and okTime then
+        RaidTrack.AwardEPToCurrentRaidMembers(amt, "Full Attendance")
+        raid.flags.fullAttendanceAwarded = true
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage(("Full Attendance awarded: EP=%s"):format(tostring(amt)))
+        end
+    elseif amt and amt > 0 and not okTime then
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage(("Full Attendance NOT awarded (raid too short, need %d min)"):format(minMin))
+        end
+    end
+end
 

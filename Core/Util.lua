@@ -453,3 +453,51 @@ end
 
 
 
+-- === RaidTrack Helpers (append) ===
+
+function RaidTrack.IsRaidLeadOrAssist()
+    return UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")
+end
+
+function RaidTrack.IsRaidLeader()
+    return UnitIsGroupLeader("player")
+end
+
+function RaidTrack.GetActiveRaidEntry()
+    if not RaidTrackDB or not RaidTrack.activeRaidID then return nil end
+    for _, r in ipairs(RaidTrackDB.raidHistory or {}) do
+        if tostring(r.id) == tostring(RaidTrack.activeRaidID) then
+            return r
+        end
+    end
+    return nil
+end
+
+function RaidTrack.GetActiveRaidConfig()
+    local raid = RaidTrack.GetActiveRaidEntry()
+    return raid and raid.settings or nil
+end
+
+function RaidTrack.MarkRaidFlag(flagKey)
+    local raid = RaidTrack.GetActiveRaidEntry()
+    if not raid then return end
+    raid.flags = raid.flags or {}
+    raid.flags[flagKey] = true
+end
+
+function RaidTrack.WasRaidFlagged(flagKey)
+    local raid = RaidTrack.GetActiveRaidEntry()
+    if not raid or not raid.flags then return false end
+    return raid.flags[flagKey] == true
+end
+-- === EP helpers ===
+function RaidTrack.AwardEPToCurrentRaidMembers(amount, reason)
+    amount = tonumber(amount) or 0
+    if amount <= 0 then return end
+    for i = 1, GetNumGroupMembers() do
+        local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
+        if name and online then
+            RaidTrack.LogEPGPChange(name, amount, 0, reason or "EP")
+        end
+    end
+end

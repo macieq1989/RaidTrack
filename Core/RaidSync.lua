@@ -19,7 +19,9 @@ end
 -- Funkcja: Wyślij dane raidowe do targeta
 -----------------------------------------------------
 function RaidTrack.SendRaidSyncData()
-    if not RaidTrack.IsOfficer() then return end
+    if not RaidTrack.IsOfficer() then
+        return
+    end
 
     local function GetMyGuildRank()
         local me = UnitName("player")
@@ -33,32 +35,41 @@ function RaidTrack.SendRaidSyncData()
     end
 
     local rank = GetMyGuildRank()
-    if not rank or rank > (RaidTrackDB.settings.minSyncRank or 1) then return end
+    if not rank or rank > (RaidTrackDB.settings.minSyncRank or 1) then
+        return
+    end
 
     local syncID = RaidTrack.GenerateRaidSyncID()
     RaidTrack.lastRaidSyncID = syncID
+
+    -- Pick active raid ID only if it is actually STARTED
+    local activeIDToSend = nil
+    for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
+        if r.status == "started" then
+            activeIDToSend = r.id
+            break
+        end
+    end
 
     local payload = {
         raidSyncID = syncID,
         presets = RaidTrackDB.raidPresets or {},
         instances = RaidTrackDB.raidInstances or {},
-        activeID = RaidTrack.activeRaidID
+        activeID = activeIDToSend -- may be nil if no started raid
     }
 
     local serialized = RaidTrack.SafeSerialize(payload)
-    
+
     RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, IsInRaid() and "RAID" or "GUILD")
 end
-
 
 -----------------------------------------------------
 -- Funkcja: Broadcast danych do całego raidu
 -----------------------------------------------------
 function RaidTrack.BroadcastRaidSync()
-   
+
     RaidTrack.SendRaidSyncData()
 end
-
 
 -----------------------------------------------------
 -- Funkcja: Odbierz i zastosuj dane raidowe
@@ -69,23 +80,42 @@ function RaidTrack.ApplyRaidSyncData(data)
     end
 
     if data.raidSyncID and RaidTrack.lastRaidSyncID and data.raidSyncID == RaidTrack.lastRaidSyncID then
-       
+
         return
     end
 
     RaidTrack.lastRaidSyncID = data.raidSyncID
     RaidTrackDB.raidPresets = data.presets or {}
     RaidTrackDB.raidInstances = data.instances or {}
-    RaidTrack.activeRaidID = data.activeID
 
-    -- Apply active config
-    if data.activeID then
+    -- Validate incoming activeID: accept only if that raid is actually "started"
+    local incomingActive = data.activeID
+    if incomingActive ~= nil then
+        local valid = false
         for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
-            if r.id == data.activeID and r.preset then
+            if r.id == incomingActive and r.status == "started" then
+                valid = true
+                break
+            end
+        end
+        if not valid then
+            incomingActive = nil
+        end
+    end
+
+    RaidTrack.activeRaidID = incomingActive
+
+    -- Apply active config only if we have a valid started raid
+    if RaidTrack.activeRaidID then
+        for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
+            if r.id == RaidTrack.activeRaidID and r.preset then
                 RaidTrack.currentRaidConfig = RaidTrackDB.raidPresets[r.preset]
                 break
             end
         end
+    else
+        -- No active raid -> clear currentRaidConfig to avoid stale UI state
+        RaidTrack.currentRaidConfig = nil
     end
 
     -- Odśwież UI
@@ -96,7 +126,6 @@ function RaidTrack.ApplyRaidSyncData(data)
         RaidTrack.UpdateRaidTabStatus()
     end
 
-  
 end
 
 -----------------------------------------------------
@@ -131,7 +160,7 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
         RaidTrack._chunkBuffers[sender] = nil
         local ok, data = RaidTrack.SafeDeserialize(full)
         if ok then
-            
+
             RaidTrack.ApplyRaidSyncData(data)
         else
             RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. tostring(sender))
@@ -140,7 +169,6 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
 end)
 
 function RaidTrack.MergeRaidSyncData(data, sender)
-    
 
     RaidTrackDB.raidPresets = data.presets or {}
     RaidTrackDB.raidInstances = data.instances or {}

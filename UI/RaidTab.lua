@@ -49,23 +49,21 @@ function RaidTrack.UpdateRaidTabStatus()
 
     RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
 
-   for _, raid in ipairs(RaidTrackDB.raidInstances) do
-    
-    if tostring(raid.id) == tostring(id) then
-        RaidTrack.activeRaidID = id
+    for _, raid in ipairs(RaidTrackDB.raidInstances) do
 
-        local elapsed = raid.started and SecondsToTime(time() - raid.started) or "N/A"
-        local status = raid.status or "unknown"
-        RaidTrack.raidTabStatusLabel:SetText(string.format("|cffccffccRaid Status: %s - %s [%s]|r",
-            status:upper(), elapsed, raid.name or "Unnamed"))
-        return
+        if tostring(raid.id) == tostring(id) then
+            RaidTrack.activeRaidID = id
+
+            local elapsed = raid.started and SecondsToTime(time() - raid.started) or "N/A"
+            local status = raid.status or "unknown"
+            RaidTrack.raidTabStatusLabel:SetText(string.format("|cffccffccRaid Status: %s - %s [%s]|r", status:upper(),
+                elapsed, raid.name or "Unnamed"))
+            return
+        end
     end
-end
-
 
     RaidTrack.raidTabStatusLabel:SetText("|cffffccccRaid Status: INACTIVE|r")
 end
-
 
 local function ClearSelection()
     raidTabData.selected = {}
@@ -329,11 +327,8 @@ function RaidTrack.DeactivateRaidTab()
 end
 function RaidTrack.RefreshRaidDropdown()
     -- Jeśli dropdown nie istnieje lub nie ma pullout, to go pomijamy
-    if not RaidTrack.raidSelectDropdown 
-       or not RaidTrack.raidSelectDropdown.pullout 
-       or not RaidTrack._tabGroup 
-       or (RaidTrack._tabGroup.GetSelectedTab 
-           and RaidTrack._tabGroup:GetSelectedTab() ~= "raidTab") then
+    if not RaidTrack.raidSelectDropdown or not RaidTrack.raidSelectDropdown.pullout or not RaidTrack._tabGroup or
+        (RaidTrack._tabGroup.GetSelectedTab and RaidTrack._tabGroup:GetSelectedTab() ~= "raidTab") then
         return
     end
 
@@ -350,13 +345,10 @@ function RaidTrack.RefreshRaidDropdown()
     RaidTrack.raidSelectDropdown:SetList(values)
 end
 
-
-
 function RaidTrack:Render_raidTab(container)
     container:SetLayout("Fill")
     container:SetFullHeight(true)
     RaidTrack.activeTab = "raidTab"
-
 
     local mainGroup = AceGUI:Create("SimpleGroup")
     mainGroup:SetFullWidth(true)
@@ -404,7 +396,6 @@ function RaidTrack:Render_raidTab(container)
     statusLabel:SetFullWidth(true)
     RaidTrack.raidTabStatusLabel = statusLabel
     controlsScroll:AddChild(statusLabel)
-    
 
     -- SELECT RAID DROPDOWN
     local raidSelectDD = AceGUI:Create("Dropdown")
@@ -442,64 +433,54 @@ function RaidTrack:Render_raidTab(container)
     local startBtn = AceGUI:Create("Button")
     startBtn:SetText("Start Raid")
     startBtn:SetFullWidth(true)
- startBtn:SetCallback("OnClick", function()
-    local selectedRaidID = raidSelectDD:GetValue()
-    if not selectedRaidID then
-        RaidTrack.AddDebugMessage("No raid selected.")
-        return
-    end
-
-    local raidInstance = nil
-    for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
-        if r.id == selectedRaidID then
-            r.status = "started"
-            r.started = time()
-
-            raidInstance = r
-            break
+    startBtn:SetCallback("OnClick", function()
+        local selectedRaidID = raidSelectDD:GetValue()
+        if not selectedRaidID then
+            RaidTrack.AddDebugMessage("No raid selected.")
+            return
         end
-    end
 
-    if not raidInstance then
-        RaidTrack.AddDebugMessage("Invalid raid selected.")
-        return
-    end
-
-    -- Ustaw aktywny raid
-    RaidTrack.activeRaidID = raidInstance.id
-    RaidTrackDB.activeRaidID = raidInstance.id
-
-    -- Zapisz stan
-    RaidTrack.AddDebugMessage("Raid started: " .. raidInstance.name .. " [" .. raidInstance.id .. "]")
-
-    -- Strefa
-    local zone = GetRealZoneText() or "Unknown Zone"
-
-    -- Stwórz instancję jeśli trzeba
-    RaidTrack.CreateRaidInstance(raidInstance.name, zone, raidInstance.preset)
-
-    RaidTrack.activeRaidID = raidInstance.id
-RaidTrackDB.activeRaidID = raidInstance.id
-
-       -- Odśwież dropdown, label i lista graczy
-    RaidTrack.RefreshRaidDropdown()
-    raidSelectDD:SetValue(raidInstance.id)
-    RaidTrack.UpdateRaidTabStatus() -- <- ręczne wywołanie natychmiast
-    UpdateRaidList()
-    RaidTrack.BroadcastRaidSync()
-
-
-    -- Start odświeżania co sekundę tylko jeśli aktywna zakładka
-    if RaidTrack.activeTab == "raidTab" and not RaidTrack._raidTabTicker then
-        RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
-            if RaidTrack.activeTab == "raidTab" then
-                RaidTrack.UpdateRaidTabStatus()
+        local raidInstance = nil
+        for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
+            if r.id == selectedRaidID then
+                r.status = "started"
+                r.started = time()
+                raidInstance = r
+                break
             end
-        end)
-    end
+        end
+        if not raidInstance then
+            RaidTrack.AddDebugMessage("Invalid raid selected.")
+            return
+        end
 
-end)
+        RaidTrack.activeRaidID = raidInstance.id
+        RaidTrackDB.activeRaidID = raidInstance.id
 
+        local zone = GetRealZoneText() or "Unknown Zone"
+
+        -- Create matching history entry using the same ID
+        RaidTrack.CreateRaidInstance(raidInstance.name, zone, raidInstance.preset, raidInstance.id)
+
+        -- Give On-Time bonus (one-time, RL only)
+        if RaidTrack.AwardOnTimeIfNeeded then
+            RaidTrack.AwardOnTimeIfNeeded()
+        end
+
+        RaidTrack.RefreshRaidDropdown()
+        raidSelectDD:SetValue(raidInstance.id)
+        RaidTrack.UpdateRaidTabStatus()
+        UpdateRaidList()
+        RaidTrack.BroadcastRaidSync()
+
+        if RaidTrack.activeTab == "raidTab" and not RaidTrack._raidTabTicker then
+            RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
+                if RaidTrack.activeTab == "raidTab" then
+                    RaidTrack.UpdateRaidTabStatus()
+                end
+            end)
+        end
+    end)
 
     controlsScroll:AddChild(startBtn)
 
@@ -553,6 +534,10 @@ end)
     applyBtn:SetText("Apply")
     applyBtn:SetWidth(100)
     applyBtn:SetCallback("OnClick", function()
+        if not RaidTrack.IsRaidLeadOrAssist or not RaidTrack.IsRaidLeadOrAssist() then
+            RaidTrack.AddDebugMessage("Only raid leader/assist can apply EP/GP from Raid tab.")
+            return
+        end
         local epv = tonumber(epInput:GetText()) or 0
         local gpv = tonumber(gpInput:GetText()) or 0
         for _, d in ipairs(raidTabData.currentData or {}) do
@@ -563,18 +548,17 @@ end)
         UpdateRaidList()
         RaidTrack.SendSyncData()
     end)
+
     applyGroup:AddChild(applyBtn)
 
     UpdateRaidList()
- if not RaidTrack._raidTabTicker then
-    RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
-        if RaidTrack.activeTab == "raidTab" then
-            RaidTrack.UpdateRaidTabStatus()
-        end
-    end)
-end
-
-
+    if not RaidTrack._raidTabTicker then
+        RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
+            if RaidTrack.activeTab == "raidTab" then
+                RaidTrack.UpdateRaidTabStatus()
+            end
+        end)
+    end
 
 end
 RaidTrack.UpdateRaidList = UpdateRaidList
