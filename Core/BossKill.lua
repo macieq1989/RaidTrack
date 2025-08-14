@@ -1,224 +1,204 @@
--- Core/BossKill.lua
+-- BossKill.lua
+-- Robust boss kill tracker using Encounter Journal driven events.
+-- Handles multi-boss fights (e.g., The Primal Council) and bosses with titles (e.g., Sennarth, the Cold Breath)
+-- without relying on unit names in the combat log.
+
 local addonName, RaidTrack = ...
-local offlineData = RaidTrack.OfflineRaidData or {}
 
--- =========================
--- Difficulty resolver (Classic -> TWW)
--- =========================
+local BossKill = {}
+RaidTrack.BossKill = BossKill
 
--- Kanoniczne klucze używane w presetach
-local CANONICAL_KEYS = { "Mythic", "Heroic", "Normal", "LFR", "25 Player", "10 Player", "40 Player" }
+local AceEvent = LibStub and LibStub("AceEvent-3.0", true)
+local frame
 
--- Rozszerzona mapa ID -> label (wspiera logi/pierwsze zgadywanie)
--- Nie musi być perfekcyjnie kompletna; resolver i tak poradzi sobie fallbackami.
-local DIFF_ID_HINT = {
-    -- Retail
-    [14] = "Normal",
-    [15] = "Heroic",
-    [16] = "Mythic",
-    [17] = "LFR", -- Raid Finder
-
-    -- Classic/TBC/WotLK style
-    [3] = "10 Player", -- 10N
-    [4] = "25 Player", -- 25N
-    [5] = "10 Player", -- 10H
-    [6] = "25 Player", -- 25H
-
-    -- Legacy / edge IDs
-    [2] = "40 Player",
-    [7] = "LFR",
-    [33] = "Timewalking",
-    [39] = "Timewalking",
-    [149] = "Timewalking",
-    [150] = "Timewalking",
-    [151] = "Timewalking",
-}
-
--- Akceptowane aliasy nazw z API (GetDifficultyInfo) -> kanoniczne klucze presetów
-local DIFF_ALIASES = {
-    ["LFR"]        = { "LFR", "Raid Finder", "Looking For Raid" },
-    ["Normal"]     = { "Normal" },
-    ["Heroic"]     = { "Heroic" },
-    ["Mythic"]     = { "Mythic" },
-    ["10 Player"]  = { "10 Player", "10-Player", "10 man", "10" },
-    ["25 Player"]  = { "25 Player", "25-Player", "25 man", "25" },
-    ["40 Player"]  = { "40 Player", "40-Player", "40 man", "40" },
-}
-
-local function keyExists(tab, key)
-    return tab and tab[key] ~= nil
-end
-
-local function aliasToCanonical(bossTab, labelFromAPI)
-    if type(labelFromAPI) ~= "string" or labelFromAPI == "" then
-        return nil
-    end
-    for canon, list in pairs(DIFF_ALIASES) do
-        for _, alias in ipairs(list) do
-            if alias == labelFromAPI and keyExists(bossTab, canon) then
-                return canon
-            end
-        end
-    end
-    return nil
-end
-
--- Główny resolver klucza trudności do użycia z tabelą bossa (preset)
-local function ResolveDifficultyKey(difficultyID, bossTab)
-    -- 1) spróbuj nazwy z API Blizzarda (Retail/TWW)
-    local apiName = GetDifficultyInfo and GetDifficultyInfo(difficultyID) or nil
-    local canonViaAPI = aliasToCanonical(bossTab, apiName)
-    if canonViaAPI then
-        return canonViaAPI
-    end
-
-    -- 2) spróbuj „hint” po ID
-    local hinted = DIFF_ID_HINT[difficultyID]
-    if hinted and keyExists(bossTab, hinted) then
-        return hinted
-    end
-
-    -- 3) jeżeli preset ma nowoczesne klucze — preferuj je
-    for _, k in ipairs({ "Mythic", "Heroic", "Normal", "LFR" }) do
-        if keyExists(bossTab, k) then
-            return k
-        end
-    end
-
-    -- 4) klasyczne rozmiary: dopasuj po realnym rozmiarze instancji
-    local _, _, _, _, _, _, _, _, maxPlayers = GetInstanceInfo()
-    if maxPlayers and maxPlayers > 0 then
-        local sizeKey = (maxPlayers >= 35 and "40 Player") or (maxPlayers > 10 and "25 Player") or "10 Player"
-        if keyExists(bossTab, sizeKey) then
-            return sizeKey
-        end
-    end
-
-    -- 5) ostatnia deska ratunku: pierwszy kanoniczny klucz, który istnieje w presecie
-    for _, k in ipairs(CANONICAL_KEYS) do
-        if keyExists(bossTab, k) then
-            return k
-        end
-    end
-
-    -- 6) całkowity fallback: zwróć label/hint lub samo ID jako tekst
-    return apiName or DIFF_ID_HINT[difficultyID] or tostring(difficultyID)
-end
-
-function RaidTrack.AwardEPForBossKill(bossName, difficultyID)
-    -- Only RL awards automatically
-    if not RaidTrack.IsRaidLeader or not RaidTrack.IsRaidLeader() then
-        return
-    end
-
-    -- używamy wyłącznie globalnego gettera; miękki fallback do cache, jeśli już jest
-    local config = (RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig()) or RaidTrack.currentRaidConfig
-    if not config or not config.bosses then
-        print("[RaidTrack] No active raid/config or bosses table.")
-        return
-    end
-
-    local bossTab = config.bosses[bossName]
-    if not bossTab then
-        print("[RaidTrack] Boss not found in preset: " .. tostring(bossName))
-        return
-    end
-
-    local diffKey = ResolveDifficultyKey(difficultyID, bossTab)
-    local bossEP = bossTab[diffKey]
-
-    -- Fallback to global "Per Boss Kill" if per-boss EP is not set
-    if (not bossEP or bossEP <= 0) then
-        local cfg = RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig() or RaidTrack.currentRaidConfig
-        local fallback = cfg and cfg.awardEP and tonumber(cfg.awardEP.bossKill) or 0
-        if fallback and fallback > 0 then
-            bossEP = fallback
-        end
-    end
-
-    if RaidTrack.AddDebugMessage then
-        RaidTrack.AddDebugMessage(string.format(
-            "Boss kill registered: %s [%s] (diffID=%s) -> EP=%s",
-            tostring(bossName), tostring(diffKey), tostring(difficultyID), tostring(bossEP)
-        ))
-    end
-
-    if not bossEP or bossEP <= 0 then
-        print(string.format("[RaidTrack] No EP configured for %s [%s]", tostring(bossName), tostring(diffKey)))
-        return
-    end
-
-    -- idempotent guard (unchanged)
-    local raid = RaidTrack.GetActiveRaidEntry and RaidTrack.GetActiveRaidEntry()
-    if not raid then return end
-    raid.awardGuard = raid.awardGuard or {}
-    local key = string.format("%s|%s", bossName, tostring(diffKey))
-    if raid.awardGuard[key] then return end
-    raid.awardGuard[key] = true
-
-    -- award to online members (unchanged)
-    for i = 1, GetNumGroupMembers() do
-        local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-        if name and online then
-            RaidTrack.LogEPGPChange(name, bossEP, 0, "Boss Kill: " .. bossName .. " [" .. tostring(diffKey) .. "]")
-        end
+-- ===== Utility / Safe Logging =====
+local function Debug(msg)
+    if RaidTrack and RaidTrack.AddDebugMessage then
+        RaidTrack.AddDebugMessage("[BossKill] " .. tostring(msg))
+    elseif DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff9acd32[RaidTrack:BossKill]|r " .. tostring(msg))
     end
 end
 
--- Track boss kill moment (for Auto-PASS filter)
-RaidTrack._lastBossKillTime = RaidTrack._lastBossKillTime or 0
+-- ===== Normalization Helpers =====
+local function SafeEJEncounterName(encounterID, fallback)
+    if not encounterID then return fallback end
+    local name = nil
+    if type(EJ_GetEncounterInfo) == "function" then
+        -- Retail / Wrath EJ API
+        name = EJ_GetEncounterInfo(encounterID)
+    elseif C_EncounterJournal and C_EncounterJournal.GetEncounterInfo then
+        local info = C_EncounterJournal.GetEncounterInfo(encounterID)
+        if info and info.name then name = info.name end
+    end
+    -- Fallback to provided name
+    return name or fallback
+end
 
-local eventFrame = CreateFrame("Frame")
-eventFrame:RegisterEvent("ENCOUNTER_END")
-eventFrame:SetScript("OnEvent", function(_, _, _, encounterName, difficultyID, _, success)
+local function NormalizeDifficulty(difficultyID)
+    -- Map Blizzard difficulty IDs to readable strings
+    local map = {
+        [14] = "Normal",  -- Raid Normal
+        [15] = "Heroic",  -- Raid Heroic
+        [16] = "Mythic",  -- Raid Mythic
+        [17] = "LFR",     -- Raid Finder
+        [1]  = "Normal",  -- 5ppl
+        [2]  = "Heroic",  -- 5ppl
+        [23] = "Mythic",  -- 5ppl
+        [8]  = "Mythic+", -- CM
+        [3]  = "10N", [4] = "25N", [5] = "10H", [6] = "25H" -- legacy
+    }
+    return map[difficultyID] or tostring(difficultyID or "?")
+end
+
+local function MakeKillPayload(encounterID, ejName, difficultyID, size, extra)
+    local now = GetServerTime and GetServerTime() or time()
+    return {
+        ts = now,
+        encounterID = encounterID,
+        name = ejName,
+        difficultyID = difficultyID,
+        difficulty = NormalizeDifficulty(difficultyID),
+        size = size,
+        source = extra and extra.source or "ENCOUNTER_END",
+        duration = extra and extra.duration or nil,
+        fromBossKillEvent = extra and extra.fromBossKillEvent or false,
+        instanceID = extra and extra.instanceID or nil,
+        zone = GetRealZoneText and GetRealZoneText() or nil,
+        mapID = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player") or nil,
+    }
+end
+
+-- ===== State =====
+local current = nil  -- { id, name, difficultyID, size, startTs }
+local lastKillKey = nil  -- "id#difficulty#ts-bucket" to debounce
+
+local function makeKillKey(encounterID, difficultyID)
+    local bucket = math.floor((GetServerTime() or time()) / 5) -- 5s bucket to avoid dupes
+    return string.format("%s#%s#%d", tostring(encounterID or "?"), tostring(difficultyID or "?"), bucket)
+end
+
+-- ===== Persistence Adapter =====
+local function PersistKill(kill)
+    -- Try known APIs in your addon, else queue.
+    if RaidTrack.Database and type(RaidTrack.Database.AddBossKill) == "function" then
+        RaidTrack.Database.AddBossKill(kill)
+        return true
+    elseif type(RaidTrack.AddBossKill) == "function" then
+        RaidTrack.AddBossKill(kill)
+        return true
+    end
+    -- Queue if no API available
+    RaidTrack._pendingBossKills = RaidTrack._pendingBossKills or {}
+    table.insert(RaidTrack._pendingBossKills, kill)
+    Debug("No AddBossKill API found; queued kill in RaidTrack._pendingBossKills.")
+    return false
+end
+
+-- ===== Event Handlers =====
+local function OnEncounterStart(_, encounterID, encounterName, difficultyID, size)
+    local ejName = SafeEJEncounterName(encounterID, encounterName)
+    current = {
+        id = encounterID,
+        name = ejName,
+        difficultyID = difficultyID,
+        size = size,
+        startTs = GetServerTime and GetServerTime() or time(),
+    }
+    Debug(("ENCOUNTER_START id=%s name=%s diff=%s size=%s"):format(
+        tostring(encounterID), tostring(ejName), tostring(difficultyID), tostring(size)))
+end
+
+local function OnEncounterEnd(_, encounterID, encounterName, difficultyID, size, success)
+    local ejName = SafeEJEncounterName(encounterID, encounterName)
+    Debug(("ENCOUNTER_END id=%s name=%s diff=%s size=%s success=%s"):format(
+        tostring(encounterID), tostring(ejName), tostring(difficultyID), tostring(size), tostring(success)))
+
     if success == 1 then
-        RaidTrack._lastBossKillTime = time()
-        RaidTrack.AwardEPForBossKill(encounterName, difficultyID)
+        local duration = nil
+        if current and current.id == encounterID and current.startTs then
+            duration = (GetServerTime and GetServerTime() or time()) - current.startTs
+        end
+
+        local key = makeKillKey(encounterID, difficultyID)
+        if key == lastKillKey then
+            Debug("Duplicate kill detected within debounce window; ignoring.")
+        else
+            lastKillKey = key
+            local payload = MakeKillPayload(encounterID, ejName, difficultyID, size, { duration = duration })
+            PersistKill(payload)
+        end
     end
+
+    -- Clear current if it matches
+    if current and current.id == encounterID then
+        current = nil
+    end
+end
+
+-- Some raids also fire BOSS_KILL(id, name) — keep as a fallback if ENCOUNTER_* missed for any reason.
+local function OnBossKill(_, bossID, bossName)
+    -- Prefer current encounter context if present
+    local encounterID, difficultyID, size, ejName = nil, nil, nil, nil
+    if current then
+        encounterID = current.id
+        difficultyID = current.difficultyID
+        size = current.size
+        ejName = current.name
+    end
+
+    -- If no current encounter (rare), use bossID/name as-is
+    local displayName = ejName or bossName
+    local key = makeKillKey(encounterID or bossID, difficultyID or 0)
+    if key == lastKillKey then
+        Debug("Duplicate kill (BOSS_KILL) within debounce window; ignoring.")
+        return
+    end
+    lastKillKey = key
+
+    local payload = MakeKillPayload(encounterID or bossID, displayName, difficultyID or 0, size, {
+        fromBossKillEvent = true,
+        source = "BOSS_KILL",
+    })
+    PersistKill(payload)
+    Debug(("BOSS_KILL id=%s name=%s (mapped encounter=%s)"):format(
+        tostring(bossID), tostring(bossName), tostring(encounterID or "n/a")))
+end
+
+-- ===== Init / Teardown =====
+function BossKill:Enable()
+    if frame then return end
+    frame = CreateFrame("Frame")
+    frame:RegisterEvent("ENCOUNTER_START")
+    frame:RegisterEvent("ENCOUNTER_END")
+    frame:RegisterEvent("BOSS_KILL")
+
+    frame:SetScript("OnEvent", function(_, event, ...)
+        if event == "ENCOUNTER_START" then
+            OnEncounterStart(event, ...)
+        elseif event == "ENCOUNTER_END" then
+            OnEncounterEnd(event, ...)
+        elseif event == "BOSS_KILL" then
+            OnBossKill(event, ...)
+        end
+    end)
+
+    Debug("BossKill enabled (listening to ENCOUNTER_* and BOSS_KILL).")
+end
+
+function BossKill:Disable()
+    if not frame then return end
+    frame:UnregisterAllEvents()
+    frame:SetScript("OnEvent", nil)
+    frame = nil
+    current = nil
+    Debug("BossKill disabled.")
+end
+
+-- Auto-enable on load
+local onLoadFrame = CreateFrame("Frame")
+onLoadFrame:RegisterEvent("PLAYER_LOGIN")
+onLoadFrame:SetScript("OnEvent", function()
+    onLoadFrame:UnregisterEvent("PLAYER_LOGIN")
+    BossKill:Enable()
 end)
-
--- Offline API passthroughs (leave as-is)
-function RaidTrack.GetRaidDifficulties()
-    return { "Normal", "Heroic", "Mythic" }
-end
-
-function RaidTrack.GetExpansions(callback)
-    local result = {}
-    for _, expansion in ipairs(offlineData) do
-        table.insert(result, {
-            id   = expansion.id or expansion.expansionID,
-            name = expansion.name,
-        })
-    end
-    callback(result)
-end
-
-function RaidTrack.GetInstancesForExpansion(expansionID, callback)
-    for _, expansion in ipairs(offlineData) do
-        if expansion.id == expansionID or expansion.expansionID == expansionID then
-            local result = {}
-            for _, instance in ipairs(expansion.instances or {}) do
-                table.insert(result, { id = instance.id, name = instance.name })
-            end
-            callback(result)
-            return
-        end
-    end
-    callback({})
-end
-
-function RaidTrack.GetEncountersForInstance(instanceID, callback)
-    for _, expansion in ipairs(offlineData) do
-        for _, instance in ipairs(expansion.instances or {}) do
-            if instance.id == instanceID then
-                local result = {}
-                for _, boss in ipairs(instance.bosses or {}) do
-                    table.insert(result, { id = boss.id, name = boss.name })
-                end
-                callback(result)
-                return
-            end
-        end
-    end
-    callback({})
-end
