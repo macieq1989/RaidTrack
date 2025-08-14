@@ -10,7 +10,6 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
         if button == "LeftButton" then
             if RaidTrack.ToggleMainFrame then
                 RaidTrack:ToggleMainWindow()
-
             end
         elseif button == "RightButton" then
             if RaidTrack.menu and RaidTrack.menu:IsShown() then
@@ -37,20 +36,22 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RaidTrack", {
 function RaidTrack.ShowContextMenu()
     if not RaidTrack.menu then
         local menu = CreateFrame("Frame", "RaidTrackMinimapMenu", UIParent, "BackdropTemplate")
-        menu:SetSize(140, 120)
 
+        -- Layout constants
+        local MENU_WIDTH       = 140
+        local PADDING          = 10
+        local BUTTON_HEIGHT    = 20
+        local BUTTON_SPACING   = 5  -- visual gap between buttons
+        local STEP             = BUTTON_HEIGHT + BUTTON_SPACING
+
+        -- Backdrop & behavior
         menu:SetBackdrop({
             bgFile = "Interface/Tooltips/UI-Tooltip-Background",
             edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
             tile = true,
             tileSize = 16,
             edgeSize = 16,
-            insets = {
-                left = 4,
-                right = 4,
-                top = 4,
-                bottom = 4
-            }
+            insets = { left = 4, right = 4, top = 4, bottom = 4 }
         })
         menu:SetBackdropColor(0, 0, 0, 0.8)
         menu:SetClampedToScreen(true)
@@ -58,10 +59,13 @@ function RaidTrack.ShowContextMenu()
         menu:SetFrameStrata("TOOLTIP")
         menu:SetToplevel(true)
 
-        local function CreateMenuButton(text, onClick, yOffset)
+        local buttons = {}
+
+        local function CreateMenuButton(text, onClick, index)
             local btn = CreateFrame("Button", nil, menu)
-            btn:SetSize(120, 20)
-            btn:SetPoint("TOP", 0, yOffset)
+            btn:SetSize(MENU_WIDTH - 2*PADDING, BUTTON_HEIGHT)
+            -- Top anchored, each next button goes lower by STEP
+            btn:SetPoint("TOP", 0, -PADDING - (index-1)*STEP)
 
             local fontString = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             fontString:SetPoint("CENTER")
@@ -80,32 +84,30 @@ function RaidTrack.ShowContextMenu()
                 onClick()
             end)
 
+            table.insert(buttons, btn)
             return btn
         end
 
-        -- Gating po randze gildii: EPGP zawsze, reszta tylko dla uprawnionych
+        -- Rank gate: only some options for authorized ranks
         local gate = RaidTrack.IsPlayerAllowedByRank and RaidTrack.IsPlayerAllowedByRank()
 
-        local y = -10
+        local idx = 1
         local function Add(text, func)
-            CreateMenuButton(text, func, y)
-            y = y - 25
+            CreateMenuButton(text, func, idx)
+            idx = idx + 1
         end
 
-        -- ZAWSZE dostępne: EPGP
-        Add("Open EPGP", function()
+        -- ZAWSZE dostępne: jedno "Open Window"
+        Add("Open Window", function()
             if RaidTrack.ShowMain then
-                RaidTrack.ShowMain("epgp")
+                RaidTrack.ShowMain("epgp") -- jeśli masz routing po zakładkach, zostawiam to jak było
             else
                 RaidTrack:ToggleMainWindow()
             end
         end)
 
+        -- Dla uprawnionych: Manual Sync i Auction Panel
         if gate then
-            Add("Open Window", function()
-                RaidTrack:ToggleMainWindow()
-            end)
-
             Add("Manual Sync", function()
                 local ok, err = pcall(RaidTrack.SendSyncData)
                 if not ok then
@@ -124,12 +126,13 @@ function RaidTrack.ShowContextMenu()
             end)
         end
 
-        Add("Hide Icon", function()
-            RaidTrackDB.minimap.hide = true
-            LibStub("LibDBIcon-1.0"):Hide("RaidTrack")
-        end)
+        -- Auto-size wysokości na podstawie liczby przycisków
+        local count = #buttons
+        if count < 1 then count = 1 end
+        local contentHeight = PADDING + (count * BUTTON_HEIGHT) + ((count - 1) * BUTTON_SPACING) + PADDING
+        menu:SetSize(MENU_WIDTH, contentHeight)
 
-        -- Hide menu when clicking outside
+        -- Klik poza menu chowa je
         local listener = CreateFrame("Frame", nil, UIParent)
         listener:SetAllPoints(UIParent)
         listener:EnableMouse(true)
@@ -163,10 +166,8 @@ frame:SetScript("OnEvent", function(_, _, name)
     if name ~= addonName then
         return
     end
-    RaidTrackDB.minimap = RaidTrackDB.minimap or {
-        minimapPos = 220,
-        hide = false
-    }
+    RaidTrackDB = RaidTrackDB or {}
+    RaidTrackDB.minimap = RaidTrackDB.minimap or { minimapPos = 220, hide = false }
 
     if not icon:IsRegistered("RaidTrack") then
         icon:Register("RaidTrack", LDB, RaidTrackDB.minimap)

@@ -2,10 +2,54 @@
 local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
 
+local ADDON_PREFIX = RaidTrack.ADDON_PREFIX or "RaidTrack"
+
 -- ======= CONFIG =======
-local DEFAULT_BOSS_LOOT_WINDOW = 120   -- można nadpisać w presecie: cfg.autoPassWindow
-local SKIP_RAID_LEADER = true          -- RL nie autopassuje
+local DEFAULT_BOSS_LOOT_WINDOW = 120
+local SKIP_RAID_LEADER = true
 -- ======================
+
+local function AP_RegisterPrefix()
+    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+        if type(ADDON_PREFIX) == "string" and #ADDON_PREFIX > 0 and #ADDON_PREFIX <= 16 then
+            C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
+        end
+    end
+end
+
+-- 🔊 odbiór broadcastu po killu (to ustawia okno na kliencie!)
+local apComm = CreateFrame("Frame")
+apComm:RegisterEvent("PLAYER_LOGIN")
+apComm:RegisterEvent("CHAT_MSG_ADDON")
+apComm:SetScript("OnEvent", function(_, event, ...)
+    if event == "PLAYER_LOGIN" then
+        AP_RegisterPrefix()
+        return
+    end
+    local prefix, msg, _, sender = ...
+    if prefix ~= ADDON_PREFIX or type(msg) ~= "string" then return end
+    local ts = msg:match("^BOSS_KILL:(%d+)$")
+    if ts then
+        RaidTrack._lastBossKillTime = tonumber(ts)
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage(("[AutoPass] boss kill broadcast received from %s ts=%s"):format(sender or "?", ts))
+        end
+    end
+end)
+
+-- >>> ADDED: globalny helper, żeby BossKill mógł łatwo wysłać sygnał
+function RaidTrack.BroadcastBossKill(ts)
+    ts = tonumber(ts) or time()
+    -- db: lokalnie też ustaw znacznik, żeby klient nadawcy nie czekał na własną wiadomość
+    RaidTrack._lastBossKillTime = ts
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        local channel = IsInRaid() and "RAID" or (IsInGroup() and "PARTY" or "GUILD")
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, "BOSS_KILL:" .. ts, channel)
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage(("[AutoPass] broadcasted boss kill ts=%d via %s"):format(ts, channel))
+        end
+    end
+end
 
 local function DBG(msg)
     if RaidTrack and RaidTrack.AddDebugMessage then
@@ -22,24 +66,38 @@ end
 local function WithinBossWindow(cfg)
     local window = (cfg and tonumber(cfg.autoPassWindow)) or DEFAULT_BOSS_LOOT_WINDOW
     local last = tonumber(RaidTrack._lastBossKillTime or 0)
-    if last <= 0 then return false end
+    if last <= 0 then
+        return false
+    end
     return (time() - last) <= window
 end
 
 local function IsLeaderExcluded()
-    if not SKIP_RAID_LEADER then return false end
+    if not SKIP_RAID_LEADER then
+        return false
+    end
     return (RaidTrack.IsRaidLeader and RaidTrack.IsRaidLeader()) == true
 end
 
 local function ShouldAutoPass()
-    if not IsInRaid() then return false, "not in raid" end
+    if not IsInRaid() then
+        return false, "not in raid"
+    end
 
     local cfg = GetCfg()
-    if not cfg then return false, "no active raid config" end
-    if cfg.autoPass == false then return false, "autoPass disabled in preset" end
+    if not cfg then
+        return false, "no active raid config"
+    end
+    if cfg.autoPass == false then
+        return false, "autoPass disabled in preset"
+    end
 
-    if IsLeaderExcluded() then return false, "excluded: raid leader" end
-    if not WithinBossWindow(cfg) then return false, "outside boss loot window" end
+    if IsLeaderExcluded() then
+        return false, "excluded: raid leader"
+    end
+    if not WithinBossWindow(cfg) then
+        return false, "outside boss loot window"
+    end
     return true
 end
 
@@ -50,17 +108,29 @@ local function AlreadyProcessed(rollID)
 end
 
 local function MarkProcessed(rollID)
-    if rollID then RaidTrack._autoPassSeen[rollID] = true end
+    if rollID then
+        RaidTrack._autoPassSeen[rollID] = true
+    end
 end
 
 local function GetRollInfo(rollID)
-    if not rollID or not GetLootRollItemInfo then return false end
+    if not rollID or not GetLootRollItemInfo then
+        return false
+    end
     local texture, name, count, quality, bop, canNeed, canGreed, canDE, reasonNeed, reasonGreed, reasonDE =
         GetLootRollItemInfo(rollID)
     return name ~= nil, {
-        texture = texture, name = name, count = count, quality = quality, bop = bop,
-        canNeed = canNeed, canGreed = canGreed, canDE = canDE,
-        reasonNeed = reasonNeed, reasonGreed = reasonGreed, reasonDE = reasonDE
+        texture = texture,
+        name = name,
+        count = count,
+        quality = quality,
+        bop = bop,
+        canNeed = canNeed,
+        canGreed = canGreed,
+        canDE = canDE,
+        reasonNeed = reasonNeed,
+        reasonGreed = reasonGreed,
+        reasonDE = reasonDE
     }
 end
 
@@ -82,9 +152,9 @@ local function DoPass(rollID)
         return
     end
 
-    DBG(("PASS rollID=%s item='%s' q=%s bop=%s need=%s greed=%s de=%s"):
-        format(tostring(rollID), tostring(info.name), tostring(info.quality), tostring(info.bop),
-               tostring(info.canNeed), tostring(info.canGreed), tostring(info.canDE)))
+    DBG(("PASS rollID=%s item='%s' q=%s bop=%s need=%s greed=%s de=%s"):format(tostring(rollID), tostring(info.name),
+        tostring(info.quality), tostring(info.bop), tostring(info.canNeed), tostring(info.canGreed),
+        tostring(info.canDE)))
 
     if RollOnLoot then
         RollOnLoot(rollID, 0) -- 0 = PASS
@@ -138,16 +208,16 @@ SLASH_RAIDTRACK_AUTOPASS1 = "/rt_autopass"
 SlashCmdList["RAIDTRACK_AUTOPASS"] = function()
     local cfg = GetCfg()
     local flags = {
-        cfg   = cfg and "OK" or "nil",
-        auto  = cfg and tostring(cfg.autoPass) or "nil",
-        raid  = tostring(IsInRaid()),
+        cfg = cfg and "OK" or "nil",
+        auto = cfg and tostring(cfg.autoPass) or "nil",
+        raid = tostring(IsInRaid()),
         leadX = tostring(IsLeaderExcluded()),
-        win   = tostring(WithinBossWindow(cfg)),
+        win = tostring(WithinBossWindow(cfg)),
         lastB = tostring(RaidTrack._lastBossKillTime or "nil"),
-        retailEvt = tostring(hasLootRollsStart),
+        retailEvt = tostring(hasLootRollsStart)
     }
-    DBG(("state: cfg=%s auto=%s inRaid=%s leaderExcluded=%s window=%s lastBoss=%s retailEvt=%s")
-        :format(flags.cfg, flags.auto, flags.raid, flags.leadX, flags.win, flags.lastB, flags.retailEvt))
+    DBG(("state: cfg=%s auto=%s inRaid=%s leaderExcluded=%s window=%s lastBoss=%s retailEvt=%s"):format(flags.cfg,
+        flags.auto, flags.raid, flags.leadX, flags.win, flags.lastB, flags.retailEvt))
 
     if type(GetActiveLootRollIDs) == "function" then
         local ids = GetActiveLootRollIDs() or {}
