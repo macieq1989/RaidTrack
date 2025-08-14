@@ -470,7 +470,15 @@ function RaidTrack:Render_raidTab(container)
         RaidTrack.RefreshRaidDropdown()
         raidSelectDD:SetValue(raidInstance.id)
         RaidTrack.UpdateRaidTabStatus()
+        RaidTrack.activeRaidID = raidInstance.id
+        RaidTrackDB.activeRaidID = raidInstance.id
+
+        -- natychmiastowy config u lidera
+        local presetTbl = RaidTrackDB.raidPresets and RaidTrackDB.raidPresets[raidInstance.preset]
+        RaidTrack.currentRaidConfig = presetTbl or RaidTrack.currentRaidConfig
+
         UpdateRaidList()
+
         RaidTrack.BroadcastRaidSync()
 
         if RaidTrack.activeTab == "raidTab" and not RaidTrack._raidTabTicker then

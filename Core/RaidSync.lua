@@ -30,29 +30,36 @@ function RaidTrack.SendRaidSyncData(opts)
         return
     end
 
-    local activeIDToSend = nil
+    -- znajdź aktywny raid i jego preset
+    local activeID, activePreset, activeConfig = nil, nil, nil
     for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
         if r.status == "started" then
-            activeIDToSend = r.id
+            activeID     = r.id
+            activePreset = r.preset
             break
         end
     end
 
+    if activeID and activePreset and RaidTrackDB.raidPresets then
+        activeConfig = RaidTrackDB.raidPresets[activePreset]
+    end
+
     local payload = {
-        raidSyncID = RaidTrack.GenerateRaidSyncID(),
-        presets    = RaidTrackDB.raidPresets or {},
-        instances  = RaidTrackDB.raidInstances or {},
-        activeID   = activeIDToSend
+        raidSyncID   = RaidTrack.GenerateRaidSyncID(),
+        presets      = RaidTrackDB.raidPresets or {},
+        instances    = RaidTrackDB.raidInstances or {},
+        activeID     = activeID,
+        activePreset = activePreset,
+        activeConfig = activeConfig,   -- migawka – kluczowe!
     }
 
     RaidTrack.lastRaidSyncID = payload.raidSyncID
 
     local serialized = RaidTrack.SafeSerialize(payload)
 
-    -- 🔒 Jeśli jest aktywny raid -> wyślij TYLKO na RAID
-    --    (presety nadal polecą też GUILD, gdy nie ma activeID)
+    -- Jeśli jest aktywny raid → TYLKO kanał RAID (żeby nie „aktywować” u osób spoza raidu)
     local channel
-    if activeIDToSend then
+    if activeID then
         channel = "RAID"
     else
         channel = (canGuild and "GUILD") or "RAID"
@@ -62,71 +69,64 @@ function RaidTrack.SendRaidSyncData(opts)
 end
 
 
+
 -----------------------------------------------------
 -- Funkcja: Broadcast danych do całego raidu
 -----------------------------------------------------
 function RaidTrack.BroadcastRaidSync()
-    -- Spróbuj do gildii (jeśli wolno), a jak nie – to przynajmniej do RAIDu od RL/Assist
+    -- pozwól przynajmniej RL/Assist nadawać do RAID
     RaidTrack.SendRaidSyncData({ allowRaid = true })
 end
+
 
 
 -----------------------------------------------------
 -- Funkcja: Odbierz i zastosuj dane raidowe
 -----------------------------------------------------
-function RaidTrack.ApplyRaidSyncData(data)
-    if type(data) ~= "table" then
-        return
+function RaidTrack.ApplyRaidSyncData(data, sender)
+    if not data or type(data) ~= "table" then return end
+
+    -- 1) merge bazy
+    RaidTrackDB.raidPresets   = data.presets   or RaidTrackDB.raidPresets   or {}
+    RaidTrackDB.raidInstances = data.instances or RaidTrackDB.raidInstances or {}
+
+    -- 2) nie aktywuj raidu spoza grupy
+    if data.activeID and not IsInRaid() then
+        data.activeID, data.activePreset, data.activeConfig = nil, nil, nil
     end
 
-    if data.raidSyncID and RaidTrack.lastRaidSyncID and data.raidSyncID == RaidTrack.lastRaidSyncID then
+    -- 3) ustaw aktywny raid + config
+    if data.activeID then
+        RaidTrack.activeRaidID   = data.activeID
+        RaidTrackDB.activeRaidID = data.activeID
 
-        return
-    end
-
-    RaidTrack.lastRaidSyncID = data.raidSyncID
-    RaidTrackDB.raidPresets = data.presets or {}
-    RaidTrackDB.raidInstances = data.instances or {}
-
-    -- Validate incoming activeID: accept only if that raid is actually "started"
-    local incomingActive = data.activeID
-    if incomingActive ~= nil then
-        local valid = false
-        for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
-            if r.id == incomingActive and r.status == "started" then
-                valid = true
-                break
+        local cfg = data.activeConfig
+        if not cfg and data.activePreset and RaidTrackDB.raidPresets then
+            cfg = RaidTrackDB.raidPresets[data.activePreset]
+        end
+        if not cfg then
+            for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
+                if tostring(r.id) == tostring(data.activeID) and r.preset then
+                    cfg = RaidTrackDB.raidPresets and RaidTrackDB.raidPresets[r.preset]
+                    break
+                end
             end
         end
-        if not valid then
-            incomingActive = nil
+
+        RaidTrack.currentRaidConfig = cfg or nil
+
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage(("[RaidSync] applied from %s: activeID=%s preset=%s cfg=%s")
+                :format(tostring(sender or "?"), tostring(data.activeID), tostring(data.activePreset),
+                        RaidTrack.currentRaidConfig and "OK" or "nil"))
         end
     end
 
-    RaidTrack.activeRaidID = incomingActive
-
-    -- Apply active config only if we have a valid started raid
-    if RaidTrack.activeRaidID then
-        for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
-            if r.id == RaidTrack.activeRaidID and r.preset then
-                RaidTrack.currentRaidConfig = RaidTrackDB.raidPresets[r.preset]
-                break
-            end
-        end
-    else
-        -- No active raid -> clear currentRaidConfig to avoid stale UI state
-        RaidTrack.currentRaidConfig = nil
-    end
-
-    -- Odśwież UI
-    if RaidTrack.RefreshRaidDropdown then
-        RaidTrack.RefreshRaidDropdown()
-    end
-    if RaidTrack.UpdateRaidTabStatus then
-        RaidTrack.UpdateRaidTabStatus()
-    end
-
+    -- 4) odśwież UI
+    if RaidTrack.RefreshRaidDropdown then RaidTrack.RefreshRaidDropdown() end
+    if RaidTrack.UpdateRaidTabStatus then RaidTrack.UpdateRaidTabStatus() end
 end
+
 
 -----------------------------------------------------
 -- Rejestracja handlera
