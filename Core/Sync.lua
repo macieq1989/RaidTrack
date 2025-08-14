@@ -870,6 +870,20 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
 
         local ok, data = RaidTrack.SafeDeserialize(full)
         if ok then
+
+            -- Core/Sync.lua (wewnątrz HandleChunkedRaidPiece, PO deserializacji)
+if ok and data then
+    -- 🔒 Bezpiecznik: nie ustawiaj aktywnego raidu u osób niebędących w raidzie
+    if data.activeID and not IsInRaid() then
+        -- Wyczyść activeID, żeby odbiorca spoza raidu nie przełączał currentRaidConfig
+        data.activeID = nil
+    end
+
+    RaidTrack.MergeRaidSyncData(data, sender)
+else
+    RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. sender)
+end
+
            
             RaidTrack.MergeRaidSyncData(data, sender)
         else

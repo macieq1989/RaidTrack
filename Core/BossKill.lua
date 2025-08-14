@@ -7,7 +7,7 @@ local offlineData = RaidTrack.OfflineRaidData or {}
 -- =========================
 
 -- Kanoniczne klucze używane w presetach
-local CANONICAL_KEYS = {"Mythic", "Heroic", "Normal", "LFR", "25 Player", "10 Player", "40 Player"}
+local CANONICAL_KEYS = { "Mythic", "Heroic", "Normal", "LFR", "25 Player", "10 Player", "40 Player" }
 
 -- Rozszerzona mapa ID -> label (wspiera logi/pierwsze zgadywanie)
 -- Nie musi być perfekcyjnie kompletna; resolver i tak poradzi sobie fallbackami.
@@ -20,29 +20,29 @@ local DIFF_ID_HINT = {
 
     -- Classic/TBC/WotLK style
     [3] = "10 Player", -- 10N
-    [4] = "25 Player", -- 25N (w klasykach bywało różnie, ale użyjemy resolvera)
+    [4] = "25 Player", -- 25N
     [5] = "10 Player", -- 10H
     [6] = "25 Player", -- 25H
 
-    -- Legacy / edge IDs spotykane w różnych buildach
+    -- Legacy / edge IDs
     [2] = "40 Player",
-    [7] = "LFR", -- w niektórych buildach
-    [33] = "Timewalking", -- na wszelki wypadek (nie używamy jako klucz EP)
+    [7] = "LFR",
+    [33] = "Timewalking",
     [39] = "Timewalking",
     [149] = "Timewalking",
     [150] = "Timewalking",
-    [151] = "Timewalking"
+    [151] = "Timewalking",
 }
 
 -- Akceptowane aliasy nazw z API (GetDifficultyInfo) -> kanoniczne klucze presetów
 local DIFF_ALIASES = {
-    ["LFR"] = {"LFR", "Raid Finder", "Looking For Raid"},
-    ["Normal"] = {"Normal"},
-    ["Heroic"] = {"Heroic"},
-    ["Mythic"] = {"Mythic"},
-    ["10 Player"] = {"10 Player", "10-Player", "10 man", "10"},
-    ["25 Player"] = {"25 Player", "25-Player", "25 man", "25"},
-    ["40 Player"] = {"40 Player", "40-Player", "40 man", "40"}
+    ["LFR"]        = { "LFR", "Raid Finder", "Looking For Raid" },
+    ["Normal"]     = { "Normal" },
+    ["Heroic"]     = { "Heroic" },
+    ["Mythic"]     = { "Mythic" },
+    ["10 Player"]  = { "10 Player", "10-Player", "10 man", "10" },
+    ["25 Player"]  = { "25 Player", "25-Player", "25 man", "25" },
+    ["40 Player"]  = { "40 Player", "40-Player", "40 man", "40" },
 }
 
 local function keyExists(tab, key)
@@ -79,7 +79,7 @@ local function ResolveDifficultyKey(difficultyID, bossTab)
     end
 
     -- 3) jeżeli preset ma nowoczesne klucze — preferuj je
-    for _, k in ipairs({"Mythic", "Heroic", "Normal", "LFR"}) do
+    for _, k in ipairs({ "Mythic", "Heroic", "Normal", "LFR" }) do
         if keyExists(bossTab, k) then
             return k
         end
@@ -94,19 +94,15 @@ local function ResolveDifficultyKey(difficultyID, bossTab)
         end
     end
 
-    -- 5) ostatnia deska ratunku: wybierz pierwszy kanoniczny klucz, który istnieje w presecie
+    -- 5) ostatnia deska ratunku: pierwszy kanoniczny klucz, który istnieje w presecie
     for _, k in ipairs(CANONICAL_KEYS) do
         if keyExists(bossTab, k) then
             return k
         end
     end
 
-    -- 6) całkowity fallback: zwróć label/hint lub samo ID jako tekst (spowoduje „No EP configured”)
+    -- 6) całkowity fallback: zwróć label/hint lub samo ID jako tekst
     return apiName or DIFF_ID_HINT[difficultyID] or tostring(difficultyID)
-end
-
-local function GetActiveRaidConfig()
-    return RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig() or nil
 end
 
 function RaidTrack.AwardEPForBossKill(bossName, difficultyID)
@@ -115,8 +111,8 @@ function RaidTrack.AwardEPForBossKill(bossName, difficultyID)
         return
     end
 
-    local config = (RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig()) or
-                       (GetActiveRaidConfig and GetActiveRaidConfig())
+    -- używamy wyłącznie globalnego gettera; miękki fallback do cache, jeśli już jest
+    local config = (RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig()) or RaidTrack.currentRaidConfig
     if not config or not config.bosses then
         print("[RaidTrack] No active raid/config or bosses table.")
         return
@@ -133,7 +129,7 @@ function RaidTrack.AwardEPForBossKill(bossName, difficultyID)
 
     -- Fallback to global "Per Boss Kill" if per-boss EP is not set
     if (not bossEP or bossEP <= 0) then
-        local cfg = RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig() or nil
+        local cfg = RaidTrack.GetActiveRaidConfig and RaidTrack.GetActiveRaidConfig() or RaidTrack.currentRaidConfig
         local fallback = cfg and cfg.awardEP and tonumber(cfg.awardEP.bossKill) or 0
         if fallback and fallback > 0 then
             bossEP = fallback
@@ -141,8 +137,10 @@ function RaidTrack.AwardEPForBossKill(bossName, difficultyID)
     end
 
     if RaidTrack.AddDebugMessage then
-        RaidTrack.AddDebugMessage(string.format("Boss kill registered: %s [%s] (diffID=%s) -> EP=%s",
-            tostring(bossName), tostring(diffKey), tostring(difficultyID), tostring(bossEP)))
+        RaidTrack.AddDebugMessage(string.format(
+            "Boss kill registered: %s [%s] (diffID=%s) -> EP=%s",
+            tostring(bossName), tostring(diffKey), tostring(difficultyID), tostring(bossEP)
+        ))
     end
 
     if not bossEP or bossEP <= 0 then
@@ -152,14 +150,10 @@ function RaidTrack.AwardEPForBossKill(bossName, difficultyID)
 
     -- idempotent guard (unchanged)
     local raid = RaidTrack.GetActiveRaidEntry and RaidTrack.GetActiveRaidEntry()
-    if not raid then
-        return
-    end
+    if not raid then return end
     raid.awardGuard = raid.awardGuard or {}
     local key = string.format("%s|%s", bossName, tostring(diffKey))
-    if raid.awardGuard[key] then
-        return
-    end
+    if raid.awardGuard[key] then return end
     raid.awardGuard[key] = true
 
     -- award to online members (unchanged)
@@ -185,15 +179,15 @@ end)
 
 -- Offline API passthroughs (leave as-is)
 function RaidTrack.GetRaidDifficulties()
-    return {"Normal", "Heroic", "Mythic"}
+    return { "Normal", "Heroic", "Mythic" }
 end
 
 function RaidTrack.GetExpansions(callback)
     local result = {}
     for _, expansion in ipairs(offlineData) do
         table.insert(result, {
-            id = expansion.id or expansion.expansionID,
-            name = expansion.name
+            id   = expansion.id or expansion.expansionID,
+            name = expansion.name,
         })
     end
     callback(result)
@@ -204,10 +198,7 @@ function RaidTrack.GetInstancesForExpansion(expansionID, callback)
         if expansion.id == expansionID or expansion.expansionID == expansionID then
             local result = {}
             for _, instance in ipairs(expansion.instances or {}) do
-                table.insert(result, {
-                    id = instance.id,
-                    name = instance.name
-                })
+                table.insert(result, { id = instance.id, name = instance.name })
             end
             callback(result)
             return
@@ -222,10 +213,7 @@ function RaidTrack.GetEncountersForInstance(instanceID, callback)
             if instance.id == instanceID then
                 local result = {}
                 for _, boss in ipairs(instance.bosses or {}) do
-                    table.insert(result, {
-                        id = boss.id,
-                        name = boss.name
-                    })
+                    table.insert(result, { id = boss.id, name = boss.name })
                 end
                 callback(result)
                 return

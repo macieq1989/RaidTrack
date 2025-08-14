@@ -18,31 +18,18 @@ end
 -----------------------------------------------------
 -- Funkcja: Wyślij dane raidowe do targeta
 -----------------------------------------------------
-function RaidTrack.SendRaidSyncData()
-    if not RaidTrack.IsOfficer() then
+
+-- Core/RaidSync.lua
+function RaidTrack.SendRaidSyncData(opts)
+    opts = opts or {}
+
+    local canGuild = RaidTrack.IsOfficer and RaidTrack.IsOfficer() or false
+    local canRaid  = IsInRaid() and (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player"))
+
+    if not canGuild and not (opts.allowRaid and canRaid) then
         return
     end
 
-    local function GetMyGuildRank()
-        local me = UnitName("player")
-        for i = 1, GetNumGuildMembers() do
-            local name, _, rankIndex = GetGuildRosterInfo(i)
-            if name and Ambiguate(name, "short") == me then
-                return rankIndex
-            end
-        end
-        return nil
-    end
-
-    local rank = GetMyGuildRank()
-    if not rank or rank > (RaidTrackDB.settings.minSyncRank or 1) then
-        return
-    end
-
-    local syncID = RaidTrack.GenerateRaidSyncID()
-    RaidTrack.lastRaidSyncID = syncID
-
-    -- Pick active raid ID only if it is actually STARTED
     local activeIDToSend = nil
     for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
         if r.status == "started" then
@@ -52,24 +39,37 @@ function RaidTrack.SendRaidSyncData()
     end
 
     local payload = {
-        raidSyncID = syncID,
-        presets = RaidTrackDB.raidPresets or {},
-        instances = RaidTrackDB.raidInstances or {},
-        activeID = activeIDToSend -- may be nil if no started raid
+        raidSyncID = RaidTrack.GenerateRaidSyncID(),
+        presets    = RaidTrackDB.raidPresets or {},
+        instances  = RaidTrackDB.raidInstances or {},
+        activeID   = activeIDToSend
     }
+
+    RaidTrack.lastRaidSyncID = payload.raidSyncID
 
     local serialized = RaidTrack.SafeSerialize(payload)
 
-    RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, IsInRaid() and "RAID" or "GUILD")
+    -- 🔒 Jeśli jest aktywny raid -> wyślij TYLKO na RAID
+    --    (presety nadal polecą też GUILD, gdy nie ma activeID)
+    local channel
+    if activeIDToSend then
+        channel = "RAID"
+    else
+        channel = (canGuild and "GUILD") or "RAID"
+    end
+
+    RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, channel)
 end
+
 
 -----------------------------------------------------
 -- Funkcja: Broadcast danych do całego raidu
 -----------------------------------------------------
 function RaidTrack.BroadcastRaidSync()
-
-    RaidTrack.SendRaidSyncData()
+    -- Spróbuj do gildii (jeśli wolno), a jak nie – to przynajmniej do RAIDu od RL/Assist
+    RaidTrack.SendRaidSyncData({ allowRaid = true })
 end
+
 
 -----------------------------------------------------
 -- Funkcja: Odbierz i zastosuj dane raidowe
