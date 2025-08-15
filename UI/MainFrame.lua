@@ -12,10 +12,6 @@ function RaidTrack:CreateMainFrame()
     frame:EnableResize(false)
     self.mainFrame = frame
 
-
-
-
-
     local tabs = {{
         text = "Raid",
         value = "raidTab"
@@ -58,27 +54,28 @@ function RaidTrack:CreateMainFrame()
     end)
 
     tabGroup:SetCallback("OnGroupSelected", function(container, event, tabKey)
-    RaidTrack.activeTab = tabKey
+        RaidTrack.activeTab = tabKey
 
-    -- Deactivate tabs we're leaving (prevent leaked highlights/frames)
-    if tabKey ~= "raidTab" and RaidTrack.DeactivateRaidTab then
-        RaidTrack.DeactivateRaidTab()
-        RaidTrack.ClearRaidSelection()
-    end
-    if tabKey ~= "guildTab" and RaidTrack.DeactivateGuildTab then
-        RaidTrack.DeactivateGuildTab()
-    end
+        -- Deactivate tabs we're leaving (prevent leaked highlights/frames)
+        if tabKey ~= "raidTab" and RaidTrack.DeactivateRaidTab then
+            RaidTrack.DeactivateRaidTab()
+            RaidTrack.ClearRaidSelection()
+        end
+        if tabKey ~= "guildTab" and RaidTrack.DeactivateGuildTab then
+            RaidTrack.DeactivateGuildTab()
+        end
 
-    -- Force-close any open pullouts / tooltips that can bleed across tabs
-    if AceGUI and AceGUI.ClearFocus then AceGUI:ClearFocus() end
-    GameTooltip:Hide()
+        -- Force-close any open pullouts / tooltips that can bleed across tabs
+        if AceGUI and AceGUI.ClearFocus then
+            AceGUI:ClearFocus()
+        end
+        GameTooltip:Hide()
 
-    container:ReleaseChildren()
-    if RaidTrack["Render_" .. tabKey] then
-        RaidTrack["Render_" .. tabKey](RaidTrack, container)
-    end
-end)
-
+        container:ReleaseChildren()
+        if RaidTrack["Render_" .. tabKey] then
+            RaidTrack["Render_" .. tabKey](RaidTrack, container)
+        end
+    end)
 
     frame:AddChild(tabGroup)
     tabGroup:SelectTab("raidTab")
@@ -134,7 +131,9 @@ end
 
 function RaidTrack.ApplyUITabVisibility()
     local tg = RaidTrack._tabGroup
-    if not tg then return end
+    if not tg then
+        return
+    end
 
     -- Użyj czystej kopii tabów; jeśli jej nie ma (edge case), spróbuj odbudować z tg.tabs
     local source = RaidTrack._all_tabs_source
@@ -148,7 +147,11 @@ function RaidTrack.ApplyUITabVisibility()
                 else
                     label = t.text
                 end
-                table.insert(source, { text = label, value = t.value, restricted = t.restricted })
+                table.insert(source, {
+                    text = label,
+                    value = t.value,
+                    restricted = t.restricted
+                })
             end
             RaidTrack._all_tabs_source = source
         else
@@ -163,7 +166,11 @@ function RaidTrack.ApplyUITabVisibility()
     for _, t in ipairs(source) do
         local isRestricted = (t.restricted ~= false)
         if (not isRestricted) or gate then
-            table.insert(fresh, { text = t.text, value = t.value, restricted = t.restricted })
+            table.insert(fresh, {
+                text = t.text,
+                value = t.value,
+                restricted = t.restricted
+            })
         end
     end
 
@@ -178,7 +185,10 @@ function RaidTrack.ApplyUITabVisibility()
     -- Sprawdź czy wybrana zakładka pozostaje po filtrze
     local exists = false
     for _, t in ipairs(fresh) do
-        if t.value == current then exists = true break end
+        if t.value == current then
+            exists = true
+            break
+        end
     end
 
     tg:SetTabs(fresh)
@@ -186,37 +196,78 @@ function RaidTrack.ApplyUITabVisibility()
         if tg.SelectTab then
             tg:SelectTab("epgpTab")
         else
-            if tg.localstatus then tg.localstatus.selected = "epgpTab" end
+            if tg.localstatus then
+                tg.localstatus.selected = "epgpTab"
+            end
         end
     end
 end
 
-
 -- Główna komenda + alias i help
 if RaidTrack.RegisterSlash then
-    RaidTrack.RegisterSlash(
-        { tag = "RAIDTRACK", aliases = { "/raidtrack", "/rt" } },
-        function(msg)
-            msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-            if msg == "help" or msg == "?" then
-                RaidTrack.PrintSlashHelp()
-                return
-            end
-            RaidTrack:ToggleMainWindow()
-        end,
-        "Open/close main window (use '/raidtrack help' for all commands)"
-    )
+    RaidTrack.RegisterSlash({
+        tag = "RAIDTRACK",
+        aliases = {"/raidtrack", "/rt"}
+    }, function(msg)
+        msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        if msg == "help" or msg == "?" then
+            RaidTrack.PrintSlashHelp()
+            return
+        end
+        RaidTrack:ToggleMainWindow()
+    end, "Open/close main window (use '/raidtrack help' for all commands)")
 else
-    -- Fallback, gdyby Util.lua nie był jeszcze załadowany (bardzo rzadkie)
+    -- Główna komenda /raidtrack (skrót /rt)
     SLASH_RAIDTRACK1 = "/raidtrack"
     SLASH_RAIDTRACK2 = "/rt"
     SlashCmdList["RAIDTRACK"] = function(msg)
-        msg = tostring(msg or ""):lower()
+        msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
         if msg == "help" or msg == "?" then
-            if RaidTrack.PrintSlashHelp then RaidTrack.PrintSlashHelp() end
+            if RaidTrack.PrintSlashHelp then
+                RaidTrack.PrintSlashHelp()
+            end
+            return
+        elseif msg:match("^cleardb%s+allplayers$") or msg:match("^cleardb%s+all$") then
+            if not RaidTrack.PlayerIsOfficer or not RaidTrack.PlayerIsOfficer() then
+                print("|cffff0000RaidTrack:|r Only officers can perform a global DB wipe.")
+                return
+            end
+            RaidTrack.PerformGlobalDBWipe()
             return
         end
         RaidTrack:ToggleMainWindow()
     end
+
 end
 
+-- ===== Global Wipe slash-commands =====
+local function _RT_DoWipeCmd(msg)
+    msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+
+    -- uprawnienia (tylko officer)
+    if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
+        print("|cffff4040[RaidTrack]|r Only officers can use this command.")
+        return
+    end
+
+    if msg == "allplayers" or msg == "all" then
+        -- obsłuż obie możliwe nazwy funkcji (zależnie co masz wgrane)
+        if RaidTrack.DoGlobalWipeAllPlayers then
+            RaidTrack.DoGlobalWipeAllPlayers("slash")
+        elseif RaidTrack.GlobalWipeAllPlayers then
+            RaidTrack.GlobalWipeAllPlayers()
+        else
+            print("|cffff4040[RaidTrack]|r Wipe function not found. Make sure the wipe helpers were added.")
+        end
+    else
+        print("|cffffff00Usage:|r /rtcleardb allplayers   or   /rtwipe allplayers")
+    end
+end
+
+-- /rtcleardb allplayers
+SLASH_RTCLEARDB1 = "/rtcleardb"
+SlashCmdList["RTCLEARDB"] = _RT_DoWipeCmd
+
+-- /rtwipe allplayers  (alias)
+SLASH_RTWIPE1 = "/rtwipe"
+SlashCmdList["RTWIPE"] = _RT_DoWipeCmd

@@ -56,24 +56,85 @@ end
 -- public alias (can be wrapped later by UI)
 RaidTrack.AddDebugMessage = RaidTrack._AddDebugMessageCore
 
--- Check if player is officer
+-- Cached officer check (no name normalization)
 function RaidTrack.IsOfficer()
     if not IsInGuild() then
         return false
     end
-    local myName = UnitName("player")
-    for i = 1, GetNumGuildMembers() do
-        local name, _, rankIndex = GetGuildRosterInfo(i)
-        -- RaidTrack.AddDebugMessage("Roster: " .. tostring(name) .. " rank " .. tostring(rankIndex))
-        if name and Ambiguate(name, "none") == myName then
-           
-            return rankIndex <= (RaidTrackDB.settings.minSyncRank or 1)
+
+    if not RaidTrack._officerCache or not RaidTrack._officerCache.ready then
+        if C_GuildInfo and C_GuildInfo.GuildRoster then
+            C_GuildInfo.GuildRoster()
+        end
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0.5, function()
+                if RaidTrack._UpdateOfficerCache then
+                    RaidTrack._UpdateOfficerCache()
+                end
+            end)
         end
     end
 
-    print(">> Could not find player in guild roster")
-    return false
+    return RaidTrack._officerCache and RaidTrack._officerCache.isOfficer or false
 end
+
+-- ===== Guild roster / officer cache (no name normalization) =====
+RaidTrack._officerCache = RaidTrack._officerCache or { ready = false, isOfficer = false, lastCheck = 0 }
+
+function RaidTrack._UpdateOfficerCache()
+    if not IsInGuild() then
+        RaidTrack._officerCache.ready = true
+        RaidTrack._officerCache.isOfficer = false
+        return
+    end
+
+    if C_GuildInfo and C_GuildInfo.GuildRoster then
+        C_GuildInfo.GuildRoster()
+    end
+
+    -- pełna nazwa gracza z realmem
+    local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
+
+    local found, isOfficer = false, false
+    local n = GetNumGuildMembers() or 0
+
+    for i = 1, n do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name and myFull ~= "" then
+            -- TYLKO ścisłe porównanie: nazwa z rosteru musi == GetUnitName("player", true)
+            if name == myFull then
+                found = true
+                local minRank = (RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
+                isOfficer = (tonumber(rankIndex) or 99) <= minRank
+                break
+            end
+        end
+    end
+
+    RaidTrack._officerCache.ready = (n > 0)
+    RaidTrack._officerCache.isOfficer = isOfficer
+
+    -- Bez spamu: jeśli roster gotowy i nie znaleziono, nie drukujemy nic
+end
+
+if not RaidTrack._guildEvtFrame then
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_LOGIN")
+    f:RegisterEvent("PLAYER_GUILD_UPDATE")
+    f:RegisterEvent("GUILD_ROSTER_UPDATE")
+    f:SetScript("OnEvent", function(_, evt)
+        if evt == "PLAYER_LOGIN" or evt == "PLAYER_GUILD_UPDATE" then
+            if C_GuildInfo and C_GuildInfo.GuildRoster then
+                C_GuildInfo.GuildRoster()
+            end
+        end
+        if RaidTrack._UpdateOfficerCache then
+            RaidTrack._UpdateOfficerCache()
+        end
+    end)
+    RaidTrack._guildEvtFrame = f
+end
+-- ===== end guild roster / officer cache =====
 
 -- Status helper
 function RaidTrack.GetSyncStatus()
@@ -672,4 +733,50 @@ function RaidTrack.PrintSlashHelp()
     end
 
     print("Tip: /raidtrack help  — to show this list")
+end
+
+-- Hard global wipe: czyści wszystko do zera i ustawia nowy epgpWipeID.
+-- Wywołanie TYLKO przez officera.
+function RaidTrack.DoGlobalWipeAllPlayers(reason)
+    reason = tostring(reason or "season reset")
+    if not RaidTrack.IsOfficer or not RaidTrack.IsOfficer() then
+        RaidTrack.AddDebugMessage("Only officer can perform /rtcleardb allplayers")
+        return
+    end
+
+    -- nadaj nowy wipeID
+    local wipeID = time()
+    RaidTrackDB.epgpWipeID = wipeID
+
+    -- lokalny „full zero”
+    RaidTrackDB.epgp = {}
+    RaidTrackDB.lootHistory = {}
+    RaidTrackDB.epgpLog = { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates = {}
+    RaidTrackDB.lootSyncStates = {}
+
+    -- ogarnij UI
+    if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
+    if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
+
+    -- ogłoś wipe całej gildii – lekkie info + wymuszenie FULL
+    local announce = { wipe = true, epgpWipeID = wipeID, reason = reason }
+    local msg = RaidTrack.SafeSerialize(announce)
+    C_ChatInfo.SendAddonMessage("RaidTrackSync", "CFG|" .. msg, "GUILD")
+
+    -- Zachęć online do natychmiastowego full pulla OD nas (pustego, ale z nowym wipeID)
+    C_Timer.After(0.3, function()
+        if IsInGuild() then
+            for i=1, GetNumGuildMembers() do
+                local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+                name = name and Ambiguate(name, "none")
+                if online and name and name ~= UnitName("player") then
+                    C_ChatInfo.SendAddonMessage("RaidTrackSync",
+                        string.format("REQ_SYNC|%d|%d", 0, 0), "WHISPER", name)
+                end
+            end
+        end
+    end)
+
+    RaidTrack.AddDebugMessage("Global wipe done (allplayers). WipeID="..wipeID.." reason="..reason)
 end

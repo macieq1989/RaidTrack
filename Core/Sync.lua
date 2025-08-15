@@ -181,7 +181,8 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         end
         payload = {
             epgpDelta = epgpDelta,
-            lootDelta = lootDelta
+            lootDelta = lootDelta,
+            epgpWipeID = RaidTrackDB.epgpWipeID or 0 -- ⬅ dorzucamy wipeID także w deltach
         }
 
         local maxEP, maxLoot = knownEP, knownLoot
@@ -294,7 +295,8 @@ function RaidTrack.BroadcastSettings()
             minSyncRank = RaidTrackDB.settings.minSyncRank,
             officerOnly = RaidTrackDB.settings.officerOnly,
             autoSync = RaidTrackDB.settings.autoSync,
-            minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex
+            minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex,
+            epgpWipeID = RaidTrackDB.epgpWipeID
         }
     }
     local msg = RaidTrack.SafeSerialize(payload)
@@ -399,13 +401,51 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     elseif msg:sub(1, 4) == "CFG|" then
         local cfgStr = msg:sub(5)
         local ok, data = RaidTrack.SafeDeserialize(cfgStr)
-        if ok and data and data.settings then
+        if not ok then
+            return
+        end
+
+        -- 1) Obsługa wipe announcement (data.wipe == true)
+        if data.wipe and tonumber(data.epgpWipeID or 0) then
+            local incoming = tonumber(data.epgpWipeID) or 0
+            local myWipe = tonumber(RaidTrackDB.epgpWipeID or 0) or 0
+            if incoming > myWipe then
+                -- wyczyść lokalnie do zera i zapisz nowy wipeID
+                RaidTrackDB.epgp = {}
+                RaidTrackDB.lootHistory = {}
+                RaidTrackDB.epgpLog = {
+                    changes = {},
+                    lastId = 0
+                }
+                RaidTrackDB.syncStates = {}
+                RaidTrackDB.lootSyncStates = {}
+                RaidTrackDB.epgpWipeID = incoming
+
+                RaidTrack.AddDebugMessage("Received WIPE announcement. New WipeID=" .. incoming .. " reason=" ..
+                                              tostring(data.reason or "?"))
+
+                -- od razu poproś najbliższych online o FULL od zera
+                C_Timer.After(0.2, function()
+                    RaidTrack.RequestSyncFromGuild()
+                end)
+
+                if RaidTrack.UpdateEPGPList then
+                    RaidTrack.UpdateEPGPList()
+                end
+                if RaidTrack.RefreshLootTab then
+                    RaidTrack.RefreshLootTab()
+                end
+            end
+            return
+        end
+
+        -- 2) Zwykłe ustawienia (jak było)
+        if data.settings then
             for k, v in pairs(data.settings) do
                 if v ~= nil then
                     RaidTrackDB.settings[k] = v
                 end
             end
-            -- ⬇️ Dodaj to poniżej:
             if RaidTrack.UpdateSettingsTab then
                 RaidTrack.UpdateSettingsTab()
             end
@@ -415,7 +455,6 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             if RaidTrack.RefreshMinimapMenu then
                 RaidTrack.RefreshMinimapMenu()
             end
-
         end
         return
     end
@@ -444,28 +483,57 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         end
 
         if data.full then
+            -- 🔒 Wipe guard: jeśli nadawca ma nowszy wipeID, czyścimy się do zera i przyjmujemy ich stan
+            local incomingWipe = tonumber(data.full.epgpWipeID or 0) or 0
+            local myWipe = tonumber(RaidTrackDB.epgpWipeID or 0) or 0
+            if incomingWipe > myWipe then
+                -- hard wipe local (zero everything)
+                RaidTrackDB.epgp = {}
+                RaidTrackDB.lootHistory = {}
+                RaidTrackDB.epgpLog = {
+                    changes = {},
+                    lastId = 0
+                }
+                RaidTrackDB.syncStates = {}
+                RaidTrackDB.lootSyncStates = {}
+                RaidTrackDB.epgpWipeID = incomingWipe
+            end
+
+            -- w tym momencie przyjmujemy pełne dane
             RaidTrackDB.epgp = data.full.epgp or {}
             RaidTrackDB.lootHistory = data.full.loot or {}
+
+            -- wyznacz maxLoot
             local maxLoot = 0
             for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
                 if e.id and e.id > maxLoot then
                     maxLoot = e.id
                 end
             end
+
+            -- ustawienia + wipeID z paczki
             if data.full.settings then
                 for k, v in pairs(data.full.settings) do
                     RaidTrackDB.settings[k] = v
                 end
             end
+            if data.full.epgpWipeID then
+                RaidTrackDB.epgpWipeID = tonumber(data.full.epgpWipeID) or RaidTrackDB.epgpWipeID
+            end
+
             RaidTrackDB.epgpLog = {
                 changes = data.full.epgpLog or {},
-                lastId = (data.full.epgpLog[#data.full.epgpLog] and data.full.epgpLog[#data.full.epgpLog].id) or 0
+                lastId = (data.full.epgpLog[#(data.full.epgpLog or {})] and data.full.epgpLog[#data.full.epgpLog].id) or
+                    0
             }
             local lastEP = RaidTrackDB.epgpLog.lastId or 0
+
+            -- zaktualizuj stany syncu (u siebie i nadawcy)
             RaidTrackDB.syncStates[who] = lastEP
             RaidTrackDB.syncStates[UnitName("player")] = lastEP
             RaidTrackDB.lootSyncStates[who] = maxLoot
             RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
+
             RaidTrack.lastSyncTime = time()
             if RaidTrack.UpdateEPGPList then
                 RaidTrack.UpdateEPGPList()
@@ -473,7 +541,8 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             if RaidTrack.RefreshLootTab then
                 RaidTrack.RefreshLootTab()
             end
-            RaidTrack.lastSyncTime = time()
+
+            -- jeśli nadal „pusto”, spróbuj dociągnąć od gildii
             if lastEP == 0 or maxLoot == 0 then
                 C_Timer.After(2, function()
                     RaidTrack.RequestSyncFromGuild()
@@ -482,7 +551,29 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             return
         end
 
-        RaidTrack.MergeEPGPChanges(data.epgpDelta)
+        -- 🔒 jeżeli w delta przyszło pole wipeID, a jest większe niż nasze, wymuś hard reset i poproś o FULL
+        local incomingWipeDelta = tonumber(data.epgpWipeID or 0) or 0
+        local myWipe = tonumber(RaidTrackDB.epgpWipeID or 0) or 0
+        if incomingWipeDelta > myWipe then
+            RaidTrackDB.epgp = {}
+            RaidTrackDB.lootHistory = {}
+            RaidTrackDB.epgpLog = {
+                changes = {},
+                lastId = 0
+            }
+            RaidTrackDB.syncStates = {}
+            RaidTrackDB.lootSyncStates = {}
+            RaidTrackDB.epgpWipeID = incomingWipeDelta
+
+            -- poproś tego nadawcę o pełny stan od zera
+            C_Timer.After(0.2, function()
+                C_ChatInfo.SendAddonMessage("RaidTrackSync", string.format("REQ_SYNC|%d|%d", 0, 0), "WHISPER", who)
+            end)
+            return
+        end
+
+        -- normalna ścieżka dla delty
+        RaidTrack.MergeEPGPChanges(data.epgpDelta or {})
         local newLastEP = 0
         for _, e in ipairs(data.epgpDelta or {}) do
             if e.id and e.id > newLastEP then
@@ -493,8 +584,9 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             RaidTrackDB.syncStates[who] = newLastEP
             RaidTrackDB.syncStates[UnitName("player")] = newLastEP
         end
+
         local seen = {}
-        for _, e in ipairs(RaidTrackDB.lootHistory) do
+        for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
             seen[e.id] = true
         end
         local mx = RaidTrackDB.lootSyncStates[who] or 0
@@ -512,6 +604,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             RaidTrack.RefreshLootTab()
         end
         RaidTrack.lastSyncTime = time()
+
     end
 end)
 
