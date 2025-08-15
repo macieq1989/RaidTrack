@@ -56,27 +56,40 @@ end
 -- public alias (can be wrapped later by UI)
 RaidTrack.AddDebugMessage = RaidTrack._AddDebugMessageCore
 
--- Cached officer check (no name normalization)
+
+-- Returns true if player guild rankIndex <= minSyncRank (default 1 = officer)
 function RaidTrack.IsOfficer()
     if not IsInGuild() then
         return false
     end
 
-    if not RaidTrack._officerCache or not RaidTrack._officerCache.ready then
-        if C_GuildInfo and C_GuildInfo.GuildRoster then
-            C_GuildInfo.GuildRoster()
-        end
-        if C_Timer and C_Timer.After then
-            C_Timer.After(0.5, function()
-                if RaidTrack._UpdateOfficerCache then
-                    RaidTrack._UpdateOfficerCache()
-                end
-            end)
+    -- Normalize both names to base (without realm), lowercase
+    local function base(name)
+        if not name then return nil end
+        -- strip realm if present
+        local n = name:match("^[^-]+") or name
+        return n:lower()
+    end
+
+    local myBase = base(UnitName("player"))
+    local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
+
+    for i = 1, GetNumGuildMembers() do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name and base(name) == myBase then
+            -- rankIndex: 0 = GM, 1 = officer, 2+ niżej
+            return rankIndex <= minRank
         end
     end
 
-    return RaidTrack._officerCache and RaidTrack._officerCache.isOfficer or false
+    -- poproś o odświeżenie rosteru na wypadek, gdyby jeszcze nie był gotowy po loginie
+    if C_GuildInfo and C_GuildInfo.GuildRoster then
+        C_GuildInfo.GuildRoster()
+    end
+    print(">> Could not find player in guild roster")
+    return false
 end
+
 
 -- ===== Guild roster / officer cache (no name normalization) =====
 RaidTrack._officerCache = RaidTrack._officerCache or { ready = false, isOfficer = false, lastCheck = 0 }
