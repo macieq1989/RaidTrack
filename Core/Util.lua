@@ -63,32 +63,63 @@ function RaidTrack.IsOfficer()
         return false
     end
 
-    -- Normalize both names to base (without realm), lowercase
-    local function base(name)
-        if not name then return nil end
-        -- strip realm if present
-        local n = name:match("^[^-]+") or name
-        return n:lower()
+    RaidTrack._officerCache = RaidTrack._officerCache or { verdict = false, ts = 0 }
+    local now = (GetTime and GetTime()) or time()
+
+    -- 1) Szybka ścieżka: jeśli klient/serwer mówi, że masz uprawnienia oficerskie, ufamy temu
+    if C_GuildInfo and C_GuildInfo.CanEditOfficerNote and C_GuildInfo.CanEditOfficerNote() then
+        RaidTrack._officerCache.verdict = true
+        RaidTrack._officerCache.ts = now
+        return true
     end
 
-    local myBase = base(UnitName("player"))
+    -- 2) Cache: przez 10s używamy ostatniego wyniku, żeby unikać zwracania false zanim roster dojedzie
+    if (now - (RaidTrack._officerCache.ts or 0)) < 10 then
+        return RaidTrack._officerCache.verdict and true or false
+    end
+
+    -- 3) Ścisłe porównanie pełnej nazwy (Nick-Realm)
+    local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
+    if myFull == "" then
+        return false
+    end
+
     local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
-
-    for i = 1, GetNumGuildMembers() do
-        local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name and base(name) == myBase then
-            -- rankIndex: 0 = GM, 1 = officer, 2+ niżej
-            return rankIndex <= minRank
-        end
-    end
-
-    -- poproś o odświeżenie rosteru na wypadek, gdyby jeszcze nie był gotowy po loginie
+    -- upewnij się, że roster jest świeży
     if C_GuildInfo and C_GuildInfo.GuildRoster then
         C_GuildInfo.GuildRoster()
     end
-    print(">> Could not find player in guild roster")
+
+    local n = GetNumGuildMembers() or 0
+    if n == 0 then
+        -- roster jeszcze nie gotowy: spróbuj odświeżyć za chwilę i zwróć ostatni znany wynik
+        if C_Timer and C_Timer.After then
+            C_Timer.After(1, function()
+                if C_GuildInfo and C_GuildInfo.GuildRoster then
+                    C_GuildInfo.GuildRoster()
+                end
+            end)
+        end
+        return RaidTrack._officerCache.verdict and true or false
+    end
+
+    for i = 1, n do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name == myFull then
+            local verdict = (tonumber(rankIndex) or 99) <= minRank
+            RaidTrack._officerCache.verdict = verdict
+            RaidTrack._officerCache.ts = now
+            return verdict
+        end
+    end
+
+    -- nie znaleziono jeszcze siebie w rosterze: zachowaj ostrożność,
+    -- ale też zapamiętaj timestamp, żeby nie pętlić się co klatkę
+    RaidTrack._officerCache.verdict = false
+    RaidTrack._officerCache.ts = now
     return false
 end
+
 
 
 -- ===== Guild roster / officer cache (no name normalization) =====
@@ -105,30 +136,31 @@ function RaidTrack._UpdateOfficerCache()
         C_GuildInfo.GuildRoster()
     end
 
-    -- pełna nazwa gracza z realmem
     local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
+    if myFull == "" then
+        RaidTrack._officerCache.ready = false
+        RaidTrack._officerCache.isOfficer = false
+        return
+    end
+
+    local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
 
     local found, isOfficer = false, false
     local n = GetNumGuildMembers() or 0
-
     for i = 1, n do
         local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name and myFull ~= "" then
-            -- TYLKO ścisłe porównanie: nazwa z rosteru musi == GetUnitName("player", true)
-            if name == myFull then
-                found = true
-                local minRank = (RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
-                isOfficer = (tonumber(rankIndex) or 99) <= minRank
-                break
-            end
+        if name == myFull then
+            found = true
+            isOfficer = (tonumber(rankIndex) or 99) <= minRank
+            break
         end
     end
 
-    RaidTrack._officerCache.ready = (n > 0)
+    -- ready == znaleźliśmy bieżącego gracza w rosterze
+    RaidTrack._officerCache.ready = found
     RaidTrack._officerCache.isOfficer = isOfficer
-
-    -- Bez spamu: jeśli roster gotowy i nie znaleziono, nie drukujemy nic
 end
+
 
 if not RaidTrack._guildEvtFrame then
     local f = CreateFrame("Frame", nil, parent)
