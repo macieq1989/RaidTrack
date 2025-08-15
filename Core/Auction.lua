@@ -21,8 +21,8 @@ local AUCTION_TYPES = {
 -- Wysyłanie danych aukcji
 -- Start an auction (only leader/officer)
 function RaidTrack.StartAuction(items, duration)
-        if not RaidTrack.IsOfficer() then
-        RaidTrack.AddDebugMessage("Only officers can start auctions.")
+    if not RaidTrack.IsRaidLeadOrAssist or not RaidTrack.IsRaidLeadOrAssist() then
+        RaidTrack.AddDebugMessage("Only raid leader/assist can start auctions.")
         return
     end
 
@@ -44,7 +44,6 @@ function RaidTrack.StartAuction(items, duration)
     RaidTrack.auctionsByID = RaidTrack.auctionsByID or {}
     RaidTrack.auctionsByID[auctionID] = activeAuction
 
-    -- Rejestrujemy lokalnie dane w activeAuctions dla lidera (ważne!)
     RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
     RaidTrack.activeAuctions[auctionID] = {
         items = {},
@@ -54,8 +53,6 @@ function RaidTrack.StartAuction(items, duration)
     }
 
     for _, item in ipairs(items) do
-        RaidTrack.AddDebugMessage("Adding item to auction: itemID=" .. tostring(item.itemID) .. ", gp=" ..
-                                      tostring(item.gp))
         if item.itemID and item.gp then
             local duplicate = false
             for _, existingItem in ipairs(activeAuction.items) do
@@ -68,25 +65,18 @@ function RaidTrack.StartAuction(items, duration)
                 local itemEntry = {
                     itemID = item.itemID,
                     gp = item.gp,
-                    link = select(2, GetItemInfo(item.itemID)) or "item:" .. item.itemID,
+                    link = select(2, GetItemInfo(item.itemID)) or ("item:" .. item.itemID),
                     responses = {}
                 }
                 table.insert(activeAuction.items, itemEntry)
                 table.insert(RaidTrack.activeAuctions[auctionID].items, itemEntry)
-
-                -- Wyślij przez sync
                 RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", {
                     auctionID = auctionID,
                     itemID = item.itemID,
                     gp = item.gp,
                     epgpChanges = {}
                 })
-            else
-                RaidTrack.AddDebugMessage("Duplicate item skipped: itemID=" .. tostring(item.itemID))
             end
-        else
-            RaidTrack.AddDebugMessage("Invalid item skipped in StartAuction: " .. tostring(item.itemID) .. ", GP: " ..
-                                          tostring(item.gp))
         end
     end
 
@@ -95,8 +85,6 @@ function RaidTrack.StartAuction(items, duration)
         started = time(),
         duration = duration
     })
-
-    RaidTrack.AddDebugMessage("Auction started with ID: " .. auctionID)
 
     C_Timer.After(0.5, function()
         RaidTrack.OpenAuctionParticipantUI({
@@ -117,6 +105,7 @@ function RaidTrack.StartAuction(items, duration)
         RaidTrack.SendEPGPChanges(epgpChanges)
     end)
 end
+
 
 function RaidTrack.SendEPGPChanges(changes)
     -- Zapewnienie, że changes to tabela
@@ -219,7 +208,7 @@ function RaidTrack.ShowAuctionResults()
 end
 
 -- Event handler
-local f = CreateFrame("Frame")
+local f = CreateFrame("Frame", nil, parent)
 f:RegisterEvent("CHAT_MSG_ADDON")
 f:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     if prefix ~= SYNC_PREFIX or sender == UnitName("player") then

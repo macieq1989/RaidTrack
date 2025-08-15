@@ -5,6 +5,12 @@ RaidTrack.settingsTabData = RaidTrack.settingsTabData or {}
 
 function RaidTrack:Render_settingsTab(container)
 
+    -- choose a safe parent for everything in this tab
+local parent = (container and container.frame)
+    or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
+    or UIParent
+
+
     GameTooltip:Hide()
     if AceGUI and AceGUI.ClearFocus then
         AceGUI:ClearFocus()
@@ -244,15 +250,25 @@ function RaidTrack:Render_settingsTab(container)
     end
     logGroup:AddChild(dbgEdit)
 
-    -- Hook aktualizacji loga
-    local origAddDebug = RaidTrack.AddDebugMessage
-    function RaidTrack.AddDebugMessage(msg)
-        origAddDebug(msg)
-        if dbgEdit and dbgEdit.SetText then
-            dbgEdit:SetText(table.concat(RaidTrack.debugMessages or {}, "\n"))
-            dbgEdit:ClearFocus()
+-- when you create your editbox for the log:
+--   dbgEdit = AceGUI:Create("MultiLineEditBox")  -- przykładowo
+RaidTrack._debugEditBox = dbgEdit
+
+-- install UI hook once (idempotent, bez rekurencji)
+if not RaidTrack._AddDebugMessageHookInstalled then
+    local _core = RaidTrack._AddDebugMessageCore
+    RaidTrack.AddDebugMessage = function(msg, opts)
+        _core(msg, opts)  -- zapis + ewentualny echo
+
+        local edit = RaidTrack._debugEditBox
+        if edit and edit.SetText then
+            edit:SetText(table.concat(RaidTrack.debugMessages or {}, "\n"))
+            edit:ClearFocus()
         end
     end
+    RaidTrack._AddDebugMessageHookInstalled = true
+end
+
 
     -- Disable if not officer
     -- Disable if not officer
