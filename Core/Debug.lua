@@ -103,28 +103,7 @@ function RaidTrack.DebugPrint(category, msg, level)
     _ringPush(date("%H:%M:%S") .. " " .. (cat and ("["..cat.."] ") or "") .. text)
 end
 
--- Wsteczna kompatybilność: wszystkie istniejące wywołania zostają
--- i przechodzą przez filtr kategorii/pseudo-poziomu (INFO)
-function RaidTrack.AddDebugMessage(msg)
-    -- ustawienia
-    RaidTrackDB = RaidTrackDB or {}
-    RaidTrackDB.settings = RaidTrackDB.settings or {}
-    -- domyślnie NIE pokazujemy na czacie; możesz włączyć /rtdebug on
-    local toChat = (RaidTrackDB.settings.debugToChat == true)
 
-    -- zawsze zapisuj do bufora UI (Settings/Log)
-    RaidTrack.debugMessages = RaidTrack.debugMessages or {}
-    local line = (date("%H:%M:%S") .. " - " .. tostring(msg))
-    table.insert(RaidTrack.debugMessages, 1, line)
-    if #RaidTrack.debugMessages > 200 then
-        table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages)
-    end
-
-    -- opcjonalnie: echo na czat tylko gdy włączone w settings
-    if toChat then
-        print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
-    end
-end
 
 
 -- API do szybkiego sterowania w locie:

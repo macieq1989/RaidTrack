@@ -192,7 +192,31 @@ function RaidTrack.ApplyUITabVisibility()
 end
 
 
-SLASH_RAIDTRACK1 = "/raidtrack"
-SlashCmdList["RAIDTRACK"] = function()
-    RaidTrack:ToggleMainWindow()
+-- Główna komenda + alias i help
+if RaidTrack.RegisterSlash then
+    RaidTrack.RegisterSlash(
+        { tag = "RAIDTRACK", aliases = { "/raidtrack", "/rt" } },
+        function(msg)
+            msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+            if msg == "help" or msg == "?" then
+                RaidTrack.PrintSlashHelp()
+                return
+            end
+            RaidTrack:ToggleMainWindow()
+        end,
+        "Open/close main window (use '/raidtrack help' for all commands)"
+    )
+else
+    -- Fallback, gdyby Util.lua nie był jeszcze załadowany (bardzo rzadkie)
+    SLASH_RAIDTRACK1 = "/raidtrack"
+    SLASH_RAIDTRACK2 = "/rt"
+    SlashCmdList["RAIDTRACK"] = function(msg)
+        msg = tostring(msg or ""):lower()
+        if msg == "help" or msg == "?" then
+            if RaidTrack.PrintSlashHelp then RaidTrack.PrintSlashHelp() end
+            return
+        end
+        RaidTrack:ToggleMainWindow()
+    end
 end
+

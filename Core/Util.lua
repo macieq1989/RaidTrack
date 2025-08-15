@@ -1,6 +1,7 @@
 -- Core/Util.lua
 local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
+RaidTrackDB = RaidTrackDB or {}
 
 local AceSerializer = LibStub:GetLibrary("AceSerializer-3.0")
 assert(AceSerializer, "AceSerializer-3.0 not found!")
@@ -26,15 +27,34 @@ function RaidTrack.SafeDeserialize(str)
     return true, payload
 end
 
--- Debug helper
-function RaidTrack.AddDebugMessage(msg)
-    print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
-    RaidTrack.debugMessages = RaidTrack.debugMessages or {}
-    table.insert(RaidTrack.debugMessages, 1, date("%H:%M:%S") .. " - " .. msg)
-    if #RaidTrack.debugMessages > 50 then
-        table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages)
+
+
+-- define once (idempotent)
+if not RaidTrack._AddDebugMessageCore then
+    function RaidTrack._AddDebugMessageCore(msg, opts)
+        if msg == nil then return end
+        opts = opts or {}
+
+        RaidTrackDB.settings = RaidTrackDB.settings or {}
+        local toChat = (RaidTrackDB.settings.debugToChat == true) or (opts.forceEcho == true)
+
+        -- 1) always store to in‑addon log buffer
+        RaidTrack.debugMessages = RaidTrack.debugMessages or {}
+        local line = date("%H:%M:%S") .. " - " .. tostring(msg)
+        table.insert(RaidTrack.debugMessages, 1, line)
+        if #RaidTrack.debugMessages > 200 then
+            table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages)
+        end
+
+        -- 2) optional echo to chat
+        if toChat then
+            print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
+        end
     end
 end
+
+-- public alias (can be wrapped later by UI)
+RaidTrack.AddDebugMessage = RaidTrack._AddDebugMessageCore
 
 -- Check if player is officer
 function RaidTrack.IsOfficer()
@@ -518,4 +538,138 @@ SlashCmdList["RTDEBUG"] = function(msg)
         local cur = RaidTrackDB.settings.debugToChat and "|cff00ff00ON|r" or "|cffff0000OFF|r"
         print("|cff00ffff[RaidTrack]|r Usage: /rtdebug [on|off]  (current: " .. cur .. ")")
     end
+end
+
+-- ==== Slash Help Registry & Auto-Discovery ==================================
+
+RaidTrack.Slash = RaidTrack.Slash or { descr = {}, order = {}, byTag = {} }
+
+-- (Opcjonalnie) ustaw opis dla TAGu (np. "RAIDTRACK", "RTDEBUG")
+function RaidTrack.SetSlashDescription(tag, text)
+    RaidTrack.Slash.descr[tag] = tostring(text or "")
+end
+
+-- Pomocnicze: zarejestruj wiele aliasów dla jednego TAGu (bez zmiany tego jak działa WoW)
+-- Przykład użycia zamiast ręcznego SLASH_XYZn:
+--   RaidTrack.RegisterSlash({ tag="RAIDTRACK", aliases={"/raidtrack","/rt"} }, handler, "Otwiera główne okno")
+function RaidTrack.RegisterSlash(opts, handler, description)
+    local tag     = assert(opts and opts.tag, "RegisterSlash: missing tag")
+    local aliases = assert(opts and opts.aliases, "RegisterSlash: missing aliases")
+    assert(type(handler) == "function", "RegisterSlash: handler must be function")
+
+    SlashCmdList[tag] = handler
+    for i, alias in ipairs(aliases) do
+        _G["SLASH_" .. tag .. i] = alias
+    end
+
+    -- opis + kolekcja do helpa
+    RaidTrack.Slash.descr[tag] = description or RaidTrack.Slash.descr[tag] or ""
+    RaidTrack.Slash.byTag[tag] = RaidTrack.Slash.byTag[tag] or {}
+    wipe(RaidTrack.Slash.byTag[tag])
+    for _, a in ipairs(aliases) do table.insert(RaidTrack.Slash.byTag[tag], a) end
+
+    -- zachowaj kolejność wyświetlania (pierwsze rejestracje wyżej)
+    local seen
+    for _, t in ipairs(RaidTrack.Slash.order) do if t == tag then seen = true break end end
+    if not seen then table.insert(RaidTrack.Slash.order, tag) end
+end
+
+-- Auto‑zbieranie już istniejących komend z globali (_G): SLASH_TAG1="/cmd"
+-- Filtrujemy do „naszych” przez prefiks aliasu (/rt, /raidtrack) albo znane TAGi.
+local _KNOWN_TAG_PREFIX = { "RAIDTRACK", "RT", "RTDEBUG", "RTAUCTION", "RTSYNC", "RTEPGP" }
+local function _isKnownTag(tag)
+    for _, p in ipairs(_KNOWN_TAG_PREFIX) do
+        if tag:find("^" .. p) then return true end
+    end
+    return false
+end
+
+local function _aliasLooksOurs(alias)
+    alias = alias:lower()
+    return alias:find("^/rt") or alias:find("^/raidtrack")
+end
+
+-- Zbierz wszystko, co już zostało zarejestrowane klasycznym sposobem
+function RaidTrack.CollectExistingSlash()
+    local found = {}
+    for k, v in pairs(_G) do
+        local tag = k:match("^SLASH_([A-Z0-9_]+)1$")
+        if tag and (SlashCmdList[tag] and type(SlashCmdList[tag]) == "function") and (_isKnownTag(tag) or true) then
+            -- wczytaj wszystkie aliasy tego TAGu
+            local aliases = {}
+            local i = 1
+            while true do
+                local alias = rawget(_G, ("SLASH_%s%d"):format(tag, i))
+                if not alias then break end
+                table.insert(aliases, alias)
+                i = i + 1
+            end
+
+            -- bierzemy tylko TAGi, które mają JAKIKOLWIEK alias wyglądający na nasz
+            local ours = false
+            for _, a in ipairs(aliases) do if _aliasLooksOurs(a) then ours = true break end end
+            if ours then
+                found[tag] = aliases
+            end
+        end
+    end
+
+    -- Zapisz do naszego rejestru (nie zmienia handlerów)
+    for tag, aliases in pairs(found) do
+        RaidTrack.Slash.byTag[tag] = { unpack(aliases) }
+        local seen
+        for _, t in ipairs(RaidTrack.Slash.order) do if t == tag then seen = true break end end
+        if not seen then table.insert(RaidTrack.Slash.order, tag) end
+        -- jeśli nie ma opisu, zostaw pusty – można uzupełnić SetSlashDescription(tag, "...") gdziekolwiek
+        RaidTrack.Slash.descr[tag] = RaidTrack.Slash.descr[tag] or ""
+    end
+end
+
+-- Wypisz ładny help
+function RaidTrack.PrintSlashHelp()
+    -- upewnij się, że mamy także te porozrzucane komendy
+    RaidTrack.CollectExistingSlash()
+
+    print("|cff00ffff[RaidTrack]|r Available slash commands:")
+    -- porządek: wg order, a nowe (zebrane) na końcu alfabetycznie
+    local known = {}
+    for _, tag in ipairs(RaidTrack.Slash.order) do
+        known[tag] = true
+        local aliases = RaidTrack.Slash.byTag[tag] or {}
+        if #aliases > 0 then
+            local primary = aliases[1]
+            local extra = ""
+            if #aliases > 1 then
+                extra = "  (aliases: " .. table.concat(aliases, ", ", 2) .. ")"
+            end
+            local desc = RaidTrack.Slash.descr[tag]
+            if desc and desc ~= "" then
+                print(("  %s - %s%s"):format(primary, desc, extra))
+            else
+                print(("  %s%s"):format(primary, extra))
+            end
+        end
+    end
+
+    -- Dołóż TAGi, które nie weszły do order (gdyby jakieś doszły dynamicznie)
+    local rest = {}
+    for tag, aliases in pairs(RaidTrack.Slash.byTag) do
+        if not known[tag] and #aliases > 0 then
+            table.insert(rest, tag)
+        end
+    end
+    table.sort(rest)
+    for _, tag in ipairs(rest) do
+        local aliases = RaidTrack.Slash.byTag[tag]
+        local primary = aliases[1]
+        local extra = (#aliases > 1) and ("  (aliases: " .. table.concat(aliases, ", ", 2) .. ")") or ""
+        local desc = RaidTrack.Slash.descr[tag] or ""
+        if desc ~= "" then
+            print(("  %s - %s%s"):format(primary, desc, extra))
+        else
+            print(("  %s%s"):format(primary, extra))
+        end
+    end
+
+    print("Tip: /raidtrack help  — to show this list")
 end
