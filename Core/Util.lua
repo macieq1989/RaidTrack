@@ -131,7 +131,7 @@ function RaidTrack._UpdateOfficerCache()
 end
 
 if not RaidTrack._guildEvtFrame then
-    local f = CreateFrame("Frame")
+    local f = CreateFrame("Frame", nil, parent)
     f:RegisterEvent("PLAYER_LOGIN")
     f:RegisterEvent("PLAYER_GUILD_UPDATE")
     f:RegisterEvent("GUILD_ROSTER_UPDATE")

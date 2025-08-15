@@ -165,7 +165,7 @@ local function DoPass(rollID)
 end
 
 -- ======= EVENTY =======
-local f = CreateFrame("Frame")
+local f = CreateFrame("Frame", nil, parent)
 f:RegisterEvent("START_LOOT_ROLL")
 
 -- Spróbuj zarejestrować Retail/TWW: LOOT_ROLLS_START, ale bez crasha na Classicach

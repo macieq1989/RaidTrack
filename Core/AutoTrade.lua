@@ -2,7 +2,7 @@ local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
 
 -- AutoTrade.lua
-local f = CreateFrame("Frame")
+local f = CreateFrame("Frame", nil, parent)
 f:RegisterEvent("TRADE_SHOW")
 f:RegisterEvent("TRADE_ACCEPT_UPDATE")
 f:RegisterEvent("TRADE_CLOSED")

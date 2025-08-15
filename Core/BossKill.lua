@@ -174,7 +174,7 @@ end
 -- Events
 -- =========================
 
-local f = CreateFrame("Frame")
+local f = CreateFrame("Frame", nil, parent)
 f:RegisterEvent("ENCOUNTER_END")
 f:RegisterEvent("BOSS_KILL")
 f:SetScript("OnEvent", function(_, event, ...)

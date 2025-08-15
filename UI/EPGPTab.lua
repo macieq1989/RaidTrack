@@ -62,7 +62,7 @@ local function BuildEPGPData()
                     ep = ep,
                     gp = gp,
                     pr = pr,
-                    class = classToken,
+                    class = classToken
                 })
             end
         else
@@ -70,11 +70,11 @@ local function BuildEPGPData()
         end
     end
 
-    table.sort(data, function(a, b) return a.pr > b.pr end)
+    table.sort(data, function(a, b)
+        return a.pr > b.pr
+    end)
     epgpTabData.currentData = data
 end
-
-
 
 local function BuildEPGPUI(scrollContainer)
     if not scrollContainer then
@@ -149,7 +149,11 @@ local function BuildEPGPUI(scrollContainer)
 
         -- Player name
         local nameLabel = AceGUI:Create("Label")
-        local color = RAID_CLASS_COLORS[d.class or ""] or { r = 1, g = 1, b = 1 }
+        local color = RAID_CLASS_COLORS[d.class or ""] or {
+            r = 1,
+            g = 1,
+            b = 1
+        }
 
         local coloredName = string.format("|cff%02x%02x%02x%s|r", color.r * 255, color.g * 255, color.b * 255, d.name)
         nameLabel:SetText(coloredName)
@@ -197,21 +201,27 @@ local function BuildEPGPUI(scrollContainer)
         scrollContainer:AddChild(loadMoreBtn)
     end
     if epgpTabData.countLabel then
-    local shown = math.min(#epgpTabData.currentData, epgpTabData.rowPoolSize or 0)
-    epgpTabData.countLabel:SetText("Displaying: " .. shown .. " / " .. #epgpTabData.currentData)
-end
-
+        local shown = math.min(#epgpTabData.currentData, epgpTabData.rowPoolSize or 0)
+        epgpTabData.countLabel:SetText("Displaying: " .. shown .. " / " .. #epgpTabData.currentData)
+    end
 
 end
 
 local function UpdateEPGPList()
     epgpTabData.rowPoolSize = epgpTabData.rowPoolSize or 75
--- reset przy każdej aktualizacji (opcjonalnie)
+    -- reset przy każdej aktualizacji (opcjonalnie)
     BuildEPGPData()
     BuildEPGPUI(epgpTabData.epgpScrollContainer)
 end
 
 function RaidTrack:Render_epgpTab(container)
+
+-- choose a safe parent for everything in this tab
+local parent = (container and container.frame)
+    or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
+    or UIParent
+
+
     container:SetLayout("Fill")
 
     local mainGroup = AceGUI:Create("SimpleGroup")
@@ -243,29 +253,26 @@ function RaidTrack:Render_epgpTab(container)
     searchBox:SetText(epgpTabData.filter or "")
     rightPanel:AddChild(searchBox)
 
-   -- Label zliczający — dodaj NA STAŁE do rightPanel (raz!)
-local countLabel = AceGUI:Create("Label")
-countLabel:SetText("")
-countLabel:SetFullWidth(true)
-rightPanel:AddChild(countLabel)
-epgpTabData.countLabel = countLabel
+    -- Label zliczający — dodaj NA STAŁE do rightPanel (raz!)
+    local countLabel = AceGUI:Create("Label")
+    countLabel:SetText("")
+    countLabel:SetFullWidth(true)
+    rightPanel:AddChild(countLabel)
+    epgpTabData.countLabel = countLabel
 
--- Callback wyszukiwarki
-searchBox:SetCallback("OnTextChanged", function(_, _, text)
-    epgpTabData.filter = text or ""
-    epgpTabData.rowPoolSize = 75
+    -- Callback wyszukiwarki
+    searchBox:SetCallback("OnTextChanged", function(_, _, text)
+        epgpTabData.filter = text or ""
+        epgpTabData.rowPoolSize = 75
 
-    if searchDebounceTimer then
-        searchDebounceTimer:Cancel()
-    end
+        if searchDebounceTimer then
+            searchDebounceTimer:Cancel()
+        end
 
-    searchDebounceTimer = C_Timer.NewTimer(0.3, function()
-        RaidTrack.UpdateEPGPList()
+        searchDebounceTimer = C_Timer.NewTimer(0.3, function()
+            RaidTrack.UpdateEPGPList()
+        end)
     end)
-end)
-
-
-
 
     -- Wywołanie UI z listą
     RaidTrack.UpdateEPGPList()

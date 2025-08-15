@@ -15,6 +15,12 @@ local raidBosses = {
 }
 
 function RaidTrack:Render_lootTab(container)
+
+    -- choose a safe parent for everything in this tab
+local parent = (container and container.frame)
+    or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
+    or UIParent
+
     container:SetLayout("Fill")
 
     local mainGroup = AceGUI:Create("SimpleGroup")

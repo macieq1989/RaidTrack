@@ -346,6 +346,12 @@ function RaidTrack.RefreshRaidDropdown()
 end
 
 function RaidTrack:Render_raidTab(container)
+
+    -- choose a safe parent for everything in this tab
+local parent = (container and container.frame)
+    or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
+    or UIParent
+
     container:SetLayout("Fill")
     container:SetFullHeight(true)
     RaidTrack.activeTab = "raidTab"

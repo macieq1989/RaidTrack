@@ -2,7 +2,7 @@ local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
 _G[addonName] = RaidTrack
 
-local f = CreateFrame("Frame")
+local f = CreateFrame("Frame", nil, parent)
 f:RegisterEvent("ADDON_LOADED")
 f:SetScript("OnEvent", function(_, _, addon)
     if addon ~= "RaidTrack" then return end

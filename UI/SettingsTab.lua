@@ -5,6 +5,12 @@ RaidTrack.settingsTabData = RaidTrack.settingsTabData or {}
 
 function RaidTrack:Render_settingsTab(container)
 
+    -- choose a safe parent for everything in this tab
+local parent = (container and container.frame)
+    or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
+    or UIParent
+
+
     GameTooltip:Hide()
     if AceGUI and AceGUI.ClearFocus then
         AceGUI:ClearFocus()

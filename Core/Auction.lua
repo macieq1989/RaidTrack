@@ -208,7 +208,7 @@ function RaidTrack.ShowAuctionResults()
 end
 
 -- Event handler
-local f = CreateFrame("Frame")
+local f = CreateFrame("Frame", nil, parent)
 f:RegisterEvent("CHAT_MSG_ADDON")
 f:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     if prefix ~= SYNC_PREFIX or sender == UnitName("player") then
