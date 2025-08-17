@@ -790,6 +790,7 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
                     auctionID = data.auctionID,
                     leader = headerData.leader,
                     started = headerData.started,
+                    endsAt  = headerData.endsAt,
                     duration = headerData.duration,
                     items = items
                 })
@@ -803,6 +804,7 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
                 items = items,
                 leader = headerData.leader,
                 started = headerData.started,
+                endsAt  = headerData.endsAt,
                 duration = headerData.duration
             }
 
