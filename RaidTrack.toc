@@ -53,6 +53,7 @@ Core/RaidConfig.lua
 Core/BossKill.lua
 Core\RaidSync.lua
 Core\AutoPass.lua
+Core/ItemTooltip.lua
 
 
 # --- UI ---
