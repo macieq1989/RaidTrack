@@ -31,16 +31,20 @@ function RaidTrack.StartAuction(items, duration)
         return
     end
 
-    local auctionID = tostring(time())
+    local serverNow = GetServerTime()
+    local endsAt = serverNow + (tonumber(duration) or 0)
+    local auctionID = tostring(serverNow) -- stabilniejsze niż local time() przy odpaleniu wielu jednocześnie
     RaidTrack.AddDebugMessage("Generated auction ID: " .. auctionID)
 
     activeAuction = {
         auctionID = auctionID,
         items = {},
         leader = UnitName("player"),
-        started = time(),
+        started = serverNow,   -- server epoch
+        endsAt  = endsAt,      -- KLUCZ: absolutny czas końca wg serwera
         duration = duration
     }
+
     RaidTrack.auctionsByID = RaidTrack.auctionsByID or {}
     RaidTrack.auctionsByID[auctionID] = activeAuction
 
@@ -48,7 +52,8 @@ function RaidTrack.StartAuction(items, duration)
     RaidTrack.activeAuctions[auctionID] = {
         items = {},
         leader = UnitName("player"),
-        started = time(),
+        started = serverNow,
+        endsAt  = endsAt,
         duration = duration
     }
 
@@ -70,6 +75,8 @@ function RaidTrack.StartAuction(items, duration)
                 }
                 table.insert(activeAuction.items, itemEntry)
                 table.insert(RaidTrack.activeAuctions[auctionID].items, itemEntry)
+
+                -- item chunk bez zmian (opcjonalnie możesz dodać endsAt, ale nagłówek i tak niesie endsAt)
                 RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "item", {
                     auctionID = auctionID,
                     itemID = item.itemID,
@@ -80,22 +87,27 @@ function RaidTrack.StartAuction(items, duration)
         end
     end
 
+    -- NAGŁÓWEK: wysyłamy endsAt (server epoch)
     RaidTrack.QueueAuctionChunkedSend(nil, auctionID, "header", {
-        leader = UnitName("player"),
-        started = time(),
+        leader  = UnitName("player"),
+        started = serverNow,
+        endsAt  = endsAt,
         duration = duration
     })
 
-    C_Timer.After(0.5, function()
+    -- Otwórz UI także u lidera (lokalnie), używaj endsAt
+    C_Timer.After(0.2, function()
         RaidTrack.OpenAuctionParticipantUI({
             auctionID = auctionID,
             leader = UnitName("player"),
-            started = time(),
+            started = serverNow,
+            endsAt  = endsAt,
             duration = duration,
             items = activeAuction.items
         })
     end)
 
+    -- Harmonogram końca według duration (lokalnie u lidera i tak kończymy o czasie)
     C_Timer.After(duration, function()
         RaidTrack.EndAuction()
     end)
@@ -105,6 +117,7 @@ function RaidTrack.StartAuction(items, duration)
         RaidTrack.SendEPGPChanges(epgpChanges)
     end)
 end
+
 
 
 function RaidTrack.SendEPGPChanges(changes)
@@ -300,26 +313,30 @@ function RaidTrack.ReceiveAuctionHeader(data)
 
     RaidTrack.partialAuction = RaidTrack.partialAuction or {}
     RaidTrack.partialAuction[auctionID] = RaidTrack.partialAuction[auctionID] or {
-        items = {},
-        leader = data.leader,
-        started = data.started,
-        duration = data.duration
+        items = {}
     }
+
+    local entry = RaidTrack.partialAuction[auctionID]
+    entry.leader   = data.leader
+    entry.started  = tonumber(data.started) or 0      -- może się przydać jako fallback
+    entry.duration = tonumber(data.duration) or 0
+    entry.endsAt   = tonumber(data.endsAt) or 0       -- KLUCZ: absolutny koniec wg serwera
 
     local attempt = 0
     local maxAttempts = 10
 
     local function tryShowAuction()
-        local entry = RaidTrack.partialAuction[auctionID]
         attempt = attempt + 1
+        local e = RaidTrack.partialAuction[auctionID]
 
-        if entry and type(entry.items) == "table" and #entry.items > 0 then
+        if e and type(e.items) == "table" and #e.items > 0 then
             RaidTrack.OpenAuctionParticipantUI({
                 auctionID = auctionID,
-                leader = entry.leader,
-                started = entry.started,
-                duration = entry.duration,
-                items = entry.items
+                leader    = e.leader,
+                started   = e.started,
+                endsAt    = e.endsAt,      -- przekazujemy endsAt do UI
+                duration  = e.duration,
+                items     = e.items
             })
             RaidTrack.partialAuction[auctionID] = nil
         elseif attempt < maxAttempts then
@@ -332,6 +349,7 @@ function RaidTrack.ReceiveAuctionHeader(data)
 
     tryShowAuction()
 end
+
 
 function RaidTrack.SendAuctionResponse(auctionID, responseType)
     -- Pobieramy itemID z aktywnego okna aukcji (UI)
@@ -393,7 +411,8 @@ local function OnOpenAuctionMessageReceived(msg)
         RaidTrack.OpenAuctionParticipantUI({
             auctionID = auctionID,
             leader = "", -- Możesz tu dodać lidera jeśli masz
-            started = 0, -- Możesz tu dodać czas startu jeśli masz
+            started = GetServerTime(), -- Możesz tu dodać czas startu jeśli masz
+            endsAt = (GetServerTime() + 30),
             duration = 0, -- Możesz tu dodać czas trwania jeśli masz
             items = items
         })

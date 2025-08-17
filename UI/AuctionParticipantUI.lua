@@ -11,11 +11,32 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
     print("==== OpenAuctionParticipantUI CALLED ====")
 
     local updatedItems = {}
-    local auctionEndTime = (auctionData.started or time()) + (auctionData.duration or 0)
     local frame
     local isWindowOpen = false
 
-    -- Load item link from cache if available; don't overwrite with "ItemID: X"
+    -- Compute server-aligned auction end
+    local function computeAuctionEnd()
+        -- prefer absolute server epoch if present
+        if type(auctionData.endsAt) == "number" and auctionData.endsAt > 0 then
+            return auctionData.endsAt
+        end
+        -- fallback: normalize started+duration (possibly local time) into server epoch
+        local started  = tonumber(auctionData.started) or 0
+        local duration = tonumber(auctionData.duration) or 0
+        if started > 0 and duration > 0 then
+            local serverNow = GetServerTime()
+            local localNow  = time()
+            local offset    = (serverNow or 0) - (localNow or 0)
+            local startedServer = started + offset
+            return startedServer + duration
+        end
+        -- last resort: now (prevents negative timers)
+        return GetServerTime()
+    end
+
+    local auctionEndTime = computeAuctionEnd()
+
+    -- Load item link from cache if available; keep nil if not cached yet
     local function UpdateItemData(item)
         local itemLink = select(2, GetItemInfo(item.itemID))
         item.link = itemLink -- may be nil if not yet cached
@@ -23,7 +44,9 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
 
     local function UpdateAuctionTime()
         if not frame then return end
-        local remainingTime = math.max(0, auctionEndTime - time())
+        local remainingTime = math.floor(auctionEndTime - GetServerTime())
+        if remainingTime < 0 then remainingTime = 0 end
+
         if remainingTime <= 0 then
             frame:SetTitle("RaidTrack Auction - Time's up!")
         else
@@ -75,7 +98,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
             scroll:AddChild(itemGroup)
 
             -- Interactive title (hoverable)
-            local titleText = item.link or ("ItemID: " .. tostring(item.itemID))
+            local titleText = item.link or ("item:" .. tostring(item.itemID))
             local titleLabel = AceGUI:Create("InteractiveLabel")
             titleLabel:SetText(titleText)
             titleLabel:SetFullWidth(true)
@@ -134,7 +157,7 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
                 btn:SetText(label)
                 btn:SetWidth(64)
                 btn:SetCallback("OnClick", function()
-                    if time() > auctionEndTime then
+                    if GetServerTime() > auctionEndTime then
                         RaidTrack.AddDebugMessage("Auction expired, response ignored.")
                         return
                     end
@@ -173,6 +196,14 @@ function RaidTrack.OpenAuctionParticipantUI(auctionData)
         -- start ticker AFTER frame exists
         C_Timer.NewTicker(1, UpdateAuctionTime)
         UpdateAuctionTime()
+
+        -- optional: one-shot resync if endsAt present (handles late-opened UIs)
+        if type(auctionData.endsAt) == "number" and auctionData.endsAt > 0 then
+            C_Timer.After(2, function()
+                auctionEndTime = auctionData.endsAt
+                UpdateAuctionTime()
+            end)
+        end
     end
 
     -- Preload items
