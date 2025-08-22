@@ -503,8 +503,11 @@ local parent = (container and container.frame)
     endBtn:SetText("End Raid")
     endBtn:SetFullWidth(true)
     endBtn:SetCallback("OnClick", function()
-       RaidTrack.BroadcastRaidSync()
+        RaidTrack.EndActiveRaid()
+        RaidTrack.RefreshRaidDropdown()
 
+        RaidTrack.UpdateRaidTabStatus()
+       
 
     end)
     controlsScroll:AddChild(endBtn)
