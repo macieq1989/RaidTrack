@@ -26,10 +26,7 @@ function RaidTrack.RegisterChunkHandler(prefix, handler)
     RaidTrack.chunkHandlers[prefix] = handler
 end
 
-RaidTrack.RegisterChunkHandler("RTSYNC", function(sender, message)
 
-    RaidTrack.HandleChunkedRaidPiece(sender, message)
-end)
 
 local genericCommFrame = CreateFrame("Frame")
 genericCommFrame:RegisterEvent("CHAT_MSG_ADDON")
