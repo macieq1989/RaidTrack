@@ -926,49 +926,26 @@ end
 -- Funkcja obsługująca odebrane chunki RAID SYNC
 -- Odbiór chunków: NOWY (z msgId) i LEGACY (bez msgId)
 function RaidTrack.HandleChunkedRaidPiece(sender, message)
-    if type(message) ~= "string" or message:sub(1,8) ~= "RTCHUNK^" then return end
-
-    local msgId, idx, total, chunkData
-
-    -- Spróbuj NOWY: RTCHUNK^<msgId>^<idx>^<total>^<data>
-    do
-        local a = message:find("^", 8, true)
-        if a then
-            local b = message:find("^", a+1, true)
-            local c = b and message:find("^", b+1, true) or nil
-            local d = c and message:find("^", c+1, true) or nil
-            if a and b and c and d then
-                msgId     = message:sub(a+1, b-1)
-                idx       = tonumber(message:sub(b+1, c-1))
-                total     = tonumber(message:sub(c+1, d-1))
-                chunkData = message:sub(d+1)
-            end
-        end
+    if type(message) ~= "string" or message:sub(1,8) ~= "RTCHUNK^" then
+        return
     end
-
-    -- Wstecznie LEGACY: RTCHUNK^<idx>^<total>^<data>
-    if not (msgId and idx and total and chunkData) then
-        local a = message:find("^", 8, true)
-        local b = a and message:find("^", a+1, true) or nil
-        local c = b and message:find("^", b+1, true) or nil
-        if a and b and c then
-            msgId     = nil
-            idx       = tonumber(message:sub(a+1, b-1))
-            total     = tonumber(message:sub(b+1, c-1))
-            chunkData = message:sub(c+1)
-        end
+    -- Legacy nagłówek: RTCHUNK^<idx>^<total>^<chunkData>
+    local idx, total, chunkData = message:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
+    if not idx or not total or not chunkData then
+        return
     end
+    idx   = tonumber(idx)
+    total = tonumber(total)
 
-    if not (idx and total and chunkData) then return end
-
-    -- Bufor kluczem: NOWY -> msgId; LEGACY -> sender
+    sender = (sender and sender ~= "") and sender or "UNKNOWN"
     RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
-    local key = msgId and ("RT@"..tostring(msgId)) or ("RT@"..tostring(sender or "UNKNOWN"))
-    local buf = RaidTrack._chunkBuffers[key] or {}
+    local key = sender .. "_RTSYNC"
+    if idx == 1 or type(RaidTrack._chunkBuffers[key]) ~= "table" then
+        RaidTrack._chunkBuffers[key] = {}
+    end
+    local buf = RaidTrack._chunkBuffers[key]
     buf[idx] = chunkData
-    RaidTrack._chunkBuffers[key] = buf
 
-    -- komplet?
     for i = 1, total do
         if not buf[i] then return end
     end
@@ -978,11 +955,13 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
 
     local ok, data = RaidTrack.SafeDeserialize(full)
     if not ok or not data then
-        if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from "..tostring(sender or "?")) end
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. tostring(sender))
+        end
         return
     end
 
-    -- Bezpiecznik: nie aktywuj raidu poza grupą
+    -- Bezpiecznik: nie aktywuj raidu osobom spoza raid group
     if data.activeID and not IsInRaid() then
         data.activeID, data.activePreset, data.activeConfig = nil, nil, nil
     end
@@ -993,6 +972,7 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         RaidTrack.MergeRaidSyncData(data, sender)
     end
 end
+
 
 
 

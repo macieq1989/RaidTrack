@@ -67,8 +67,8 @@ function RaidTrack.SendRaidSyncData(opts)
     local canRaid   = IsInRaid() and (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player"))
     local isOfficer = RaidTrack.IsOfficer and RaidTrack.IsOfficer() or false
 
-    -- Pozwól KAŻDEMU w gildii rozsyłać upserty presetów/instancji.
-    -- RAID tylko gdy RL/assist i allowRaid.
+    -- Upserty presetów/instancji może wysłać każdy członek gildii (GUILD).
+    -- RAID tylko gdy RL/Assist i allowRaid.
     if not inGuild and not (opts.allowRaid and canRaid) then
         return
     end
@@ -78,9 +78,9 @@ function RaidTrack.SendRaidSyncData(opts)
         if type(tbl) ~= "table" then return 0 end
         for _ in pairs(tbl) do n = n + 1 end
         return n
-        end
+    end
 
-    -- aktywny raid -> żeby UI innych miało pod ręką config
+    -- aktywny raid (dla wygody UI u odbiorców)
     local activeID, activePreset, activeConfig = nil, nil, nil
     for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
         if tostring(r.status or ""):lower() == "started" and not tonumber(r.endAt) then
@@ -93,7 +93,7 @@ function RaidTrack.SendRaidSyncData(opts)
         activeConfig = RaidTrackDB.raidPresets[activePreset]
     end
 
-    -- tombstony (kasowania rozsyła tylko oficer)
+    -- tombstony (kasowania – tylko oficer)
     local removedPresets, removedInstances = {}, {}
     if isOfficer then
         for k, v in pairs(RaidTrackDB._presetTombstones or {}) do
@@ -122,18 +122,16 @@ function RaidTrack.SendRaidSyncData(opts)
     local serialized = RaidTrack.SafeSerialize(payload)
     if not serialized then return end
 
-    -- Kanał: aktywny -> RAID, inaczej -> GUILD (dla wszystkich w gildii)
+    -- Kanał: aktywny → RAID; inaczej → GUILD (dla każdego w gildii)
     local channel = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
-
-    -- Używamy LEGACY nagłówka chunków (zgodny z Twoimi resztami)
     RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, channel)
 
-    -- oficer po wysyłce czyści swoje tombstony
     if isOfficer then
         if #removedPresets > 0 then RaidTrackDB._presetTombstones = {} end
         if #removedInstances > 0 then RaidTrackDB._instanceTombstones = {} end
     end
 end
+
 
 
 

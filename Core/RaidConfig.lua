@@ -11,25 +11,84 @@ function RaidTrack.SaveRaidPreset(name, config)
     RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
     RaidTrackDB._presetTombstones = RaidTrackDB._presetTombstones or {}
 
-    if not name or type(config) ~= "table" then
-        RaidTrack.AddDebugMessage("SaveRaidPreset: invalid name or config")
+    -- sanitize nazwy
+    if type(name) ~= "string" then
+        RaidTrack.AddDebugMessage("SaveRaidPreset: invalid name type")
+        return
+    end
+    -- trim tylko z brzegów (nie zmieniamy liter/spacji w środku, żeby nie psuć istniejących odwołań)
+    local trimmed = name:match("^%s*(.-)%s*$")
+    if not trimmed or trimmed == "" then
+        RaidTrack.AddDebugMessage("SaveRaidPreset: empty name after trim")
+        return
+    end
+    name = trimmed
+
+    if type(config) ~= "table" then
+        RaidTrack.AddDebugMessage("SaveRaidPreset: invalid config type")
         return
     end
 
+    -- Bezpieczna kopia: wycinamy funkcje/userdata/thread i metatabele, zostawiamy tylko {table,string,number,boolean}
+    local function SanitizeTable(src, seen)
+        if type(src) ~= "table" then return {} end
+        seen = seen or {}
+        if seen[src] then return {} end
+        seen[src] = true
+
+        local dst = {}
+        -- zerknij czy była metatabela i ją ignoruj (AceSerializer nie lubi)
+        setmetatable(dst, nil)
+
+        for k, v in pairs(src) do
+            local kt = type(k)
+            local vt = type(v)
+            -- klucze inne niż string/number zamieniamy na string (żeby serializacja nie poleciała)
+            local key = (kt == "string" or kt == "number") and k or tostring(k)
+
+            if vt == "table" then
+                dst[key] = SanitizeTable(v, seen)
+            elseif vt == "string" or vt == "number" or vt == "boolean" then
+                dst[key] = v
+            else
+                -- pomijamy: function, userdata, thread, nil
+                -- (nil i tak by nie został zapisany)
+            end
+        end
+        return dst
+    end
+
+    local cleanConfig = SanitizeTable(config)
+
     -- zapis/aktualizacja
-    RaidTrackDB.raidPresets[name] = config
+    RaidTrackDB.raidPresets[name] = cleanConfig
+
     -- jeśli wcześniej był tombstone po delete — usuń go
     if RaidTrackDB._presetTombstones[name] then
         RaidTrackDB._presetTombstones[name] = nil
     end
 
-    RaidTrack.AddDebugMessage("Saved raid preset: " .. name)
+    -- (opcjonalnie) lekka diagnoza rozmiaru — pomoże gdyby kiedyś wlazło w limity
+    if RaidTrack.SafeSerialize then
+        local s = RaidTrack.SafeSerialize({test=cleanConfig})
+        if s and type(s) == "string" then
+            RaidTrack.AddDebugMessage(("Saved raid preset: %s (approx %d bytes)"):format(name, #s))
+        else
+            RaidTrack.AddDebugMessage("Saved raid preset: "..name)
+        end
+    else
+        RaidTrack.AddDebugMessage("Saved raid preset: "..name)
+    end
+
+    -- odśwież UI, jeśli jest
+    if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
 
     -- natychmiastowy sync do gildii/raida
     if RaidTrack.SendRaidSyncData then
         RaidTrack.SendRaidSyncData()
     end
 end
+
 
 
 -- Zwraca listę presetów jako tabela: { ["name"] = config, ... }
