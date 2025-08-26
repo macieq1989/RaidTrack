@@ -94,12 +94,11 @@ function RaidTrack.SendRaidSyncData(opts)
 
     local inGuild   = IsInGuild()
     local canRaid   = IsInRaid() and (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player"))
-    local isOfficer = RaidTrack.IsOfficer and RaidTrack.IsOfficer() or false
     if not inGuild and not (opts.allowRaid and canRaid) then
         return
     end
 
-    -- aktywny raid (tylko ID i nazwa presetu; BEZ aktywnego configu)
+    -- aktywny raid (ID + preset; bez activeConfig)
     local activeID, activePreset = nil, nil
     for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
         if tostring(r.status or ""):lower() == "started" and not tonumber(r.endAt) then
@@ -109,25 +108,25 @@ function RaidTrack.SendRaidSyncData(opts)
         end
     end
 
-    -- tombstony rozsyła tylko oficer
-    local removedPresets, removedInstances = nil, nil
-    if isOfficer then
-        removedPresets, removedInstances = {}, {}
-        for k, v in pairs(RaidTrackDB._presetTombstones or {}) do if v then table.insert(removedPresets, k) end end
-        for k, v in pairs(RaidTrackDB._instanceTombstones or {}) do if v then table.insert(removedInstances, k) end end
-        if #removedPresets == 0 then removedPresets = nil end
-        if #removedInstances == 0 then removedInstances = nil end
+    -- ZBIERZ tombstony (od każdego, nie tylko oficera)
+    local removedPresets, removedInstances = {}, {}
+    for k, v in pairs(RaidTrackDB._presetTombstones or {}) do
+        if v then table.insert(removedPresets, k) end
     end
+    for k, v in pairs(RaidTrackDB._instanceTombstones or {}) do
+        if v then table.insert(removedInstances, k) end
+    end
+    if #removedPresets == 0 then removedPresets = nil end
+    if #removedInstances == 0 then removedInstances = nil end
 
     local payload = {
         raidSyncID       = RaidTrack.GenerateRaidSyncID(),
-        presets          = RaidTrackDB.raidPresets or {},
+        presets          = RaidTrackDB.raidPresets   or {},
         instances        = RaidTrackDB.raidInstances or {},
         removedPresets   = removedPresets,
         removedInstances = removedInstances,
         activeID         = activeID,
         activePreset     = activePreset,
-        -- activeConfig    -- USUNIĘTE z payloadu
     }
 
     RaidTrack.lastRaidSyncID = payload.raidSyncID
@@ -135,22 +134,25 @@ function RaidTrack.SendRaidSyncData(opts)
     local serialized = RaidTrack.SafeSerialize(payload)
     if not serialized then return end
 
-    -- Kanał: aktywny -> RAID, inaczej -> GUILD
+    -- Kanał: aktywny -> RAID, inaczej -> GUILD (jeśli w gildii)
     local channel = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
 
-    -- Preferuj JEDEN chunk, a jak się nie mieści – użyj chunkera.
-    if #serialized <= 200 then
-        C_ChatInfo.SendAddonMessage("RTSYNC", ("RTCHUNK^1^1^%s"):format(serialized), channel)
-    else
-        RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
+    -- ZAWSZE przez chunk-sender z msgId (spójny nagłówek; total==1 gdy mały)
+    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
 
+    -- Po wysyłce wyczyść TYLKO to, co poszło w removed*
+    if removedPresets then
+        for _, name in ipairs(removedPresets) do
+            RaidTrackDB._presetTombstones[name] = nil
+        end
     end
-
-    if isOfficer then
-        if removedPresets   then RaidTrackDB._presetTombstones   = {} end
-        if removedInstances then RaidTrackDB._instanceTombstones = {} end
+    if removedInstances then
+        for _, id in ipairs(removedInstances) do
+            RaidTrackDB._instanceTombstones[id] = nil
+        end
     end
 end
+
 
 
 

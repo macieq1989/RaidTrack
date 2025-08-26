@@ -106,28 +106,36 @@ function RaidTrack.DeleteRaidPreset(name)
     RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
     RaidTrackDB._presetTombstones = RaidTrackDB._presetTombstones or {}
 
-    if not name or type(name) ~= "string" or name == "" then
+    if type(name) ~= "string" then
         RaidTrack.AddDebugMessage("DeleteRaidPreset: invalid name")
         return
     end
+    -- TRIM nazwy jak w Save (unikniemy rozjazdów "Foo" vs "Foo ")
+    local trimmed = name:match("^%s*(.-)%s*$")
+    if not trimmed or trimmed == "" then
+        RaidTrack.AddDebugMessage("DeleteRaidPreset: empty name after trim")
+        return
+    end
+    name = trimmed
 
     if RaidTrackDB.raidPresets[name] ~= nil then
         RaidTrackDB.raidPresets[name] = nil
-        RaidTrackDB._presetTombstones[name] = true
-        RaidTrack.AddDebugMessage("Deleted raid preset (tombstoned): " .. name)
+        RaidTrack.AddDebugMessage("Deleted raid preset (local): " .. name)
     else
-        RaidTrackDB._presetTombstones[name] = true
-        RaidTrack.AddDebugMessage("Tombstoned non-existing preset (for propagation): " .. name)
+        RaidTrack.AddDebugMessage("Tombstoning non-existing preset (for propagation): " .. name)
     end
 
-    -- Batch flush (unikamy floodu przy wielu kasowaniach)
+    -- ZAWSZE wystaw tombstone (żeby inni usunęli)
+    RaidTrackDB._presetTombstones[name] = true
+
+    -- Batch flush (unikamy floodu przy serii kasowań)
     if RaidTrack.RequestRaidSyncFlush then
         RaidTrack.RequestRaidSyncFlush(0.5)
     elseif RaidTrack.SendRaidSyncData then
         RaidTrack.SendRaidSyncData()
     end
-
 end
+
 
 
 
