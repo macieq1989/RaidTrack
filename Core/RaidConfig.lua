@@ -37,17 +37,20 @@ function RaidTrack.DeleteRaidPreset(name)
     end
 
     if RaidTrackDB.raidPresets[name] ~= nil then
-        -- lokalnie usuń
         RaidTrackDB.raidPresets[name] = nil
-        -- zaznacz do rozgłoszenia jako jawne usunięcie
         RaidTrackDB._presetTombstones[name] = true
         RaidTrack.AddDebugMessage("Deleted raid preset (tombstoned): " .. name)
     else
-        -- nawet jeśli nie mamy lokalnie, zaznacz tombstone – żeby inni też skasowali
         RaidTrackDB._presetTombstones[name] = true
         RaidTrack.AddDebugMessage("Tombstoned non-existing preset (for propagation): " .. name)
     end
+
+    -- Rozgłoś natychmiast po lokalnym usunięciu
+    if RaidTrack.SendRaidSyncData then
+        RaidTrack.SendRaidSyncData()
+    end
 end
+
 
 
 -- Wczytuje preset i wywołuje callback z jego zawartością

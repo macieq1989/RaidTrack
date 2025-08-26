@@ -188,6 +188,9 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
                 :format(tostring(sender or "?"), tostring(data.activeID), tostring(data.activePreset),
                         RaidTrack.currentRaidConfig and "OK" or "nil"))
         end
+          if RaidTrack.SendRaidSyncData then
+        RaidTrack.SendRaidSyncData()
+    end
     end
 
     -- 5) krytyczny krok: jeśli lokalny DC guard trzymał aktywny raid, a instancja ma endAt → wyczyść
