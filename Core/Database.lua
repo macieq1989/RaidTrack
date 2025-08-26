@@ -11,6 +11,14 @@ RaidTrackDB.epgpLog = RaidTrackDB.epgpLog or { changes = {}, lastId = 0 }
 RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
 RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 RaidTrackDB.settings.minSyncRank = RaidTrackDB.settings.minSyncRank or 1
+-- Presety i instancje raidu (jeśli nie istnieją, zainicjuj)
+RaidTrackDB.raidPresets   = RaidTrackDB.raidPresets   or {}
+RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+
+-- Tombstony dla jawnych usunięć (lokalne buforowanie tego, co trzeba rozesłać)
+RaidTrackDB._presetTombstones   = RaidTrackDB._presetTombstones   or {}
+RaidTrackDB._instanceTombstones = RaidTrackDB._instanceTombstones or {}
+
 
 -- Default minimum UI tab access rank (Access Control)
 if type(RaidTrackDB.settings.minUITabRankIndex) ~= "number"
