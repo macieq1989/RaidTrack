@@ -123,7 +123,8 @@ function RaidTrack.SendRaidSyncData(opts)
 
     -- Kanał: aktywny → RAID; inaczej → GUILD (dla każdego w gildii)
     local channel = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
-    RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, channel)
+    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
+
 
     -- oficer czyści swoje tombstony po wysyłce
     if isOfficer then
