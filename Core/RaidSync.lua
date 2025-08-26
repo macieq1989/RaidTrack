@@ -363,12 +363,13 @@ end
 -----------------------------------------------------
 -- Chunk handler registration
 -----------------------------------------------------
+-- Rejestr odbiornika RTsync (obsługa NEW i LEGACY headera, bufor per msgId/sender)
 RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
     if type(msg) ~= "string" or msg:sub(1,8) ~= "RTCHUNK^" then return end
 
     local msgId, idx, total, chunk
 
-    -- NOWY format: RTCHUNK^<msgId>^<idx>^<total>^<data>
+    -- NOWY: RTCHUNK^<msgId>^<idx>^<total>^<data>
     do
         local a = msg:find("^", 8, true)
         if a then
@@ -384,7 +385,7 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
         end
     end
 
-    -- LEGACY fallback: RTCHUNK^<idx>^<total>^<data>
+    -- LEGACY: RTCHUNK^<idx>^<total>^<data>
     if not (msgId and idx and total and chunk) then
         local a = msg:find("^", 8, true)
         local b = a and msg:find("^", a+1, true) or nil
@@ -396,19 +397,15 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
             chunk = msg:sub(c+1)
         end
     end
-
     if not (idx and total and chunk) then return end
 
-    -- Bufor:
-    --   NOWY -> per msgId
-    --   LEGACY -> per sender (bo brak msgId)
+    -- Bufor: NEW -> per msgId, LEGACY -> per sender
     RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
     local key = msgId and ("RT@"..tostring(msgId)) or ("RT@"..tostring(sender or "UNKNOWN"))
     local buf = RaidTrack._chunkBuffers[key] or {}
     buf[idx] = chunk
     RaidTrack._chunkBuffers[key] = buf
 
-    -- komplet?
     for i=1,total do if not buf[i] then return end end
 
     local full = table.concat(buf, "")
@@ -432,7 +429,11 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
     elseif RaidTrack.MergeRaidSyncData then
         RaidTrack.MergeRaidSyncData(data, sender)
     end
+
+    -- Throttle'owany refresh UI
+    if RaidTrack.RequestUIRefresh then RaidTrack.RequestUIRefresh("RTSYNC-Recv") end
 end)
+
 
 
 -----------------------------------------------------

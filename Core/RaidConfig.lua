@@ -80,13 +80,15 @@ function RaidTrack.SaveRaidPreset(name, config)
         RaidTrack.AddDebugMessage("Saved raid preset: "..name)
     end
 
-    -- odśwież UI, jeśli jest
-    if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
+  -- odśwież UI
+if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
+-- batched flush (eliminuje spam przy serii zmian)
+if RaidTrack.RequestRaidSyncFlush then
+    RaidTrack.RequestRaidSyncFlush(0.35)
+elseif RaidTrack.SendRaidSyncData then
+    RaidTrack.SendRaidSyncData()
+end
 
-    -- natychmiastowy sync do gildii/raida
-    if RaidTrack.SendRaidSyncData then
-        RaidTrack.SendRaidSyncData()
-    end
 end
 
 
