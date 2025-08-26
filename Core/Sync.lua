@@ -913,40 +913,69 @@ end
 
 -- Funkcja obsługująca odebrane chunki RAID SYNC
 function RaidTrack.HandleChunkedRaidPiece(sender, message)
-    -- literalny check (nie używamy wzorca dla '^')
-    if type(message) ~= "string" or not message:find("RTCHUNK^", 1, true) then
+    if type(message) ~= "string" then return end
+    if message:sub(1, 8) ~= "RTCHUNK^" then
         return
     end
 
-    -- wyciągnij 3 pierwsze pola; reszta to surowy AceSerializer (może zawierać '^')
-    local chunkNum, totalChunks, chunkData = message:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
-    if not chunkNum or not totalChunks or not chunkData then
+    local msgId, idx, total, chunkData
+
+    -- 1) Spróbuj parsować format z msgId: RTCHUNK^<msgId>^<idx>^<total>^<chunkData>
+    do
+        local p1 = message:find("^", 8, true)           -- po 'RTCHUNK^'
+        if p1 then
+            local p2 = message:find("^", p1 + 1, true)
+            local p3 = p2 and message:find("^", p2 + 1, true) or nil
+            local p4 = p3 and message:find("^", p3 + 1, true) or nil
+
+            if p1 and p2 and p3 and p4 then
+                msgId     = message:sub(p1 + 1, p2 - 1)
+                idx       = tonumber(message:sub(p2 + 1, p3 - 1))
+                total     = tonumber(message:sub(p3 + 1, p4 - 1))
+                chunkData = message:sub(p4 + 1)
+            end
+        end
+    end
+
+    -- 2) Wsteczna kompatybilność: RTCHUNK^<idx>^<total>^<chunkData> (bez msgId)
+    if not (msgId and idx and total and chunkData) then
+        local q1 = message:find("^", 8, true)
+        local q2 = q1 and message:find("^", q1 + 1, true) or nil
+        local q3 = q2 and message:find("^", q2 + 1, true) or nil
+        if q1 and q2 and q3 then
+            -- brak msgId
+            msgId     = "LEGACY" -- stały znacznik, żeby buforować per-nadawca
+            idx       = tonumber(message:sub(q1 + 1, q2 - 1))
+            total     = tonumber(message:sub(q2 + 1, q3 - 1))
+            chunkData = message:sub(q3 + 1)
+        end
+    end
+
+    if not (idx and total and chunkData) then
         return
     end
-    chunkNum = tonumber(chunkNum)
-    totalChunks = tonumber(totalChunks)
 
-    -- bufor per-nadawca
-    local key = (tostring(sender or "?") .. "_RTSYNC")
+    -- Buffer per (sender,msgId)
+    local key = (tostring(sender or "?") .. "@" .. tostring(msgId or "LEGACY") .. "_RTSYNC")
     RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
     local buf = RaidTrack._chunkBuffers[key] or {}
-    buf[chunkNum] = chunkData
+    buf[idx] = chunkData
     RaidTrack._chunkBuffers[key] = buf
 
     -- komplet?
-    for i = 1, totalChunks do
+    for i = 1, total do
         if not buf[i] then
             return
         end
     end
 
-    -- sklej i rozkoduj
+    -- sklej i wyczyść bufor
     local full = table.concat(buf, "")
     RaidTrack._chunkBuffers[key] = nil
 
     local ok, data = RaidTrack.SafeDeserialize(full)
     if ok and data then
-        -- bezpiecznik: nie aktywuj raidu poza raid grupą
+        -- nie aktywuj aktywnego raidu osobom spoza raidu
         if data.activeID and not IsInRaid() then
             data.activeID, data.activePreset, data.activeConfig = nil, nil, nil
         end
@@ -962,7 +991,6 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         end
     end
 end
-
 
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
 
