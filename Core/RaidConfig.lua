@@ -4,19 +4,33 @@ RaidTrack = RaidTrack or {}
 RaidTrackDB = RaidTrackDB or {}
 RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
 
+
 -- Zapisuje preset pod daną nazwą
 function RaidTrack.SaveRaidPreset(name, config)
     RaidTrackDB = RaidTrackDB or {}
     RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
+    RaidTrackDB._presetTombstones = RaidTrackDB._presetTombstones or {}
 
     if not name or type(config) ~= "table" then
         RaidTrack.AddDebugMessage("SaveRaidPreset: invalid name or config")
         return
     end
 
+    -- zapis/aktualizacja
     RaidTrackDB.raidPresets[name] = config
+    -- jeśli wcześniej był tombstone po delete — usuń go
+    if RaidTrackDB._presetTombstones[name] then
+        RaidTrackDB._presetTombstones[name] = nil
+    end
+
     RaidTrack.AddDebugMessage("Saved raid preset: " .. name)
+
+    -- natychmiastowy sync do gildii/raida
+    if RaidTrack.SendRaidSyncData then
+        RaidTrack.SendRaidSyncData()
+    end
 end
+
 
 -- Zwraca listę presetów jako tabela: { ["name"] = config, ... }
 function RaidTrack.GetRaidPresets()
@@ -66,26 +80,34 @@ function RaidTrack.LoadRaidPreset(name, callback)
     end
 end
 
+
 -- Tworzy instancję nowego raidu na podstawie wybranego presetu
 function RaidTrack.CreateRaidInstance(name, zone, presetName, forcedId)
     if not name or not zone then
         RaidTrack.AddDebugMessage("CreateRaidInstance: missing name or zone")
         return
     end
+    RaidTrackDB = RaidTrackDB or {}
+    RaidTrackDB.raidPresets   = RaidTrackDB.raidPresets   or {}
+    RaidTrackDB.raidHistory   = RaidTrackDB.raidHistory   or {}
+    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+
     local preset = RaidTrackDB.raidPresets[presetName]
     if not preset then
         RaidTrack.AddDebugMessage("CreateRaidInstance: preset not found: " .. tostring(presetName))
         return
     end
-    RaidTrackDB.raidHistory = RaidTrackDB.raidHistory or {}
-    local id = forcedId or time()
 
+    local now = time()
+    local id  = forcedId or now
+
+    -- pełny wpis do historii (szczegóły do UI/EPGP)
     local raid = {
         id = id,
         name = name,
         zone = zone,
         date = date("%Y-%m-%d"),
-        started = time(),
+        started = now,
         ended = nil,
         presetName = presetName,
         settings = CopyTable(preset),
@@ -96,11 +118,25 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName, forcedId)
         flags = {},
         status = "started"
     }
-
     table.insert(RaidTrackDB.raidHistory, raid)
+
+    -- skrócony wpis do instancji (to leci w sync)
+    table.insert(RaidTrackDB.raidInstances, {
+        id = id,
+        title = name,
+        zone = zone,
+        preset = presetName,
+        status = "started",
+        startAt = now,
+        ended = nil,
+        endAt = nil,
+    })
+
+    -- ustaw aktywny raid
     RaidTrack.activeRaidID = id
     RaidTrackDB.activeRaidID = id
 
+    -- zaciągnij graczy z grupy
     for i = 1, GetNumGroupMembers() do
         local nm = GetRaidRosterInfo(i)
         if nm then
@@ -109,7 +145,13 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName, forcedId)
     end
 
     RaidTrack.AddDebugMessage("Created raid instance: " .. name .. " (" .. zone .. ") using preset " .. presetName)
+
+    -- natychmiastowy sync (żeby każdy zobaczył nowy raid)
+    if RaidTrack.SendRaidSyncData then
+        RaidTrack.SendRaidSyncData()
+    end
 end
+
 
 function RaidTrack.EndActiveRaid()
     local id = RaidTrack.activeRaidID or RaidTrackDB.activeRaidID
@@ -118,20 +160,24 @@ function RaidTrack.EndActiveRaid()
         return
     end
 
+    local now = time()
+    local changedInstances, changedHistory = false, false
+
     -- One-time Full Attendance (before clearing active)
     if RaidTrack.AwardFullAttendanceIfNeededAtEnd then
-        RaidTrack.AwardFullAttendanceIfNeededAtEnd()
+        pcall(RaidTrack.AwardFullAttendanceIfNeededAtEnd)
     end
-
-    local now = time()
 
     -- Mark 'ended' in raidInstances (set both ended + endAt for consistency)
     if RaidTrackDB and RaidTrackDB.raidInstances then
         for _, r in ipairs(RaidTrackDB.raidInstances) do
             if tostring(r.id) == tostring(id) then
-                r.status = "ended"
-                r.ended  = r.ended  or now
-                r.endAt  = r.endAt  or r.ended
+                if r.status ~= "ended" or not r.ended then
+                    r.status = "ended"
+                    r.ended  = r.ended  or now
+                    r.endAt  = r.endAt  or r.ended
+                    changedInstances = true
+                end
                 break
             end
         end
@@ -141,9 +187,12 @@ function RaidTrack.EndActiveRaid()
     if RaidTrackDB and RaidTrackDB.raidHistory then
         for _, h in ipairs(RaidTrackDB.raidHistory) do
             if tostring(h.id) == tostring(id) then
-                h.status = "ended"
-                h.ended  = h.ended  or now
-                h.endAt  = h.endAt  or h.ended
+                if h.status ~= "ended" or not h.ended then
+                    h.status = "ended"
+                    h.ended  = h.ended  or now
+                    h.endAt  = h.endAt  or h.ended
+                    changedHistory = true
+                end
                 break
             end
         end
@@ -153,12 +202,13 @@ function RaidTrack.EndActiveRaid()
     RaidTrack.activeRaidID      = nil
     RaidTrackDB.activeRaidID    = nil
     RaidTrack.currentRaidConfig = nil
+    RaidTrack.activeRaidConfig  = nil
 
     if RaidTrack.AddDebugMessage then
         RaidTrack.AddDebugMessage("Raid ended: " .. tostring(id))
     end
 
-    -- UI refresh
+    -- UI refresh (protected)
     if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
     if RaidTrack.UpdateRaidTabStatus then pcall(RaidTrack.UpdateRaidTabStatus) end
 
@@ -169,7 +219,15 @@ function RaidTrack.EndActiveRaid()
         -- fallback if helper not present
         if RaidTrack.BroadcastRaidSync then pcall(RaidTrack.BroadcastRaidSync) end
     end
+
+    -- Always push a fresh sync so wszyscy od razu widzą status=ended
+    if RaidTrack.SendRaidSyncData then
+        pcall(RaidTrack.SendRaidSyncData)
+    end
+
+    return (changedInstances or changedHistory) and true or false
 end
+
 
 
 
