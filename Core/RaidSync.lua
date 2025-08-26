@@ -113,7 +113,8 @@ function RaidTrack.SendRaidSyncData(opts)
     if #serialized <= 200 then
         C_ChatInfo.SendAddonMessage("RTSYNC", ("RTCHUNK^1^1^%s"):format(serialized), channel)
     else
-        RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, channel)  -- legacy nagłówek, kompatybilny z resztą
+        RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
+
     end
 
     if isOfficer then
@@ -327,36 +328,76 @@ end
 -- Chunk handler registration
 -----------------------------------------------------
 RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
-    local index, total, chunk = msg:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
-    if not index or not total or not chunk then
-        return
-    end
-    index = tonumber(index)
-    total = tonumber(total)
+    if type(msg) ~= "string" or msg:sub(1,8) ~= "RTCHUNK^" then return end
 
-    RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
-    RaidTrack._chunkBuffers[sender] = RaidTrack._chunkBuffers[sender] or {}
-    local buf = RaidTrack._chunkBuffers[sender]
+    local msgId, idx, total, chunk
 
-    buf[index] = chunk
-
-    -- complete?
-    for i = 1, total do
-        if not buf[i] then
-            return
+    -- NOWY format: RTCHUNK^<msgId>^<idx>^<total>^<data>
+    do
+        local a = msg:find("^", 8, true)
+        if a then
+            local b = msg:find("^", a+1, true)
+            local c = b and msg:find("^", b+1, true) or nil
+            local d = c and msg:find("^", c+1, true) or nil
+            if a and b and c and d then
+                msgId = msg:sub(a+1, b-1)
+                idx   = tonumber(msg:sub(b+1, c-1))
+                total = tonumber(msg:sub(c+1, d-1))
+                chunk = msg:sub(d+1)
+            end
         end
     end
 
-    local full = table.concat(buf)
-    RaidTrack._chunkBuffers[sender] = nil
+    -- LEGACY fallback: RTCHUNK^<idx>^<total>^<data>
+    if not (msgId and idx and total and chunk) then
+        local a = msg:find("^", 8, true)
+        local b = a and msg:find("^", a+1, true) or nil
+        local c = b and msg:find("^", b+1, true) or nil
+        if a and b and c then
+            msgId = nil
+            idx   = tonumber(msg:sub(a+1, b-1))
+            total = tonumber(msg:sub(b+1, c-1))
+            chunk = msg:sub(c+1)
+        end
+    end
+
+    if not (idx and total and chunk) then return end
+
+    -- Bufor:
+    --   NOWY -> per msgId
+    --   LEGACY -> per sender (bo brak msgId)
+    RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
+    local key = msgId and ("RT@"..tostring(msgId)) or ("RT@"..tostring(sender or "UNKNOWN"))
+    local buf = RaidTrack._chunkBuffers[key] or {}
+    buf[idx] = chunk
+    RaidTrack._chunkBuffers[key] = buf
+
+    -- komplet?
+    for i=1,total do if not buf[i] then return end end
+
+    local full = table.concat(buf, "")
+    RaidTrack._chunkBuffers[key] = nil
 
     local ok, data = RaidTrack.SafeDeserialize(full)
-    if ok then
+    if not ok or not data then
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from "..tostring(sender or "?"))
+        end
+        return
+    end
+
+    -- Bezpiecznik aktywnego raidu
+    if data.activeID and not IsInRaid() then
+        data.activeID, data.activePreset = nil, nil
+    end
+
+    if RaidTrack.ApplyRaidSyncData then
         RaidTrack.ApplyRaidSyncData(data, sender)
-    else
-        RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. tostring(sender))
+    elseif RaidTrack.MergeRaidSyncData then
+        RaidTrack.MergeRaidSyncData(data, sender)
     end
 end)
+
 
 -----------------------------------------------------
 -- Legacy compatibility shim (was in your file)
