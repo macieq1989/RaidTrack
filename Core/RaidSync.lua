@@ -67,6 +67,7 @@ function RaidTrack.SendRaidSyncData(opts)
     local canRaid   = IsInRaid() and (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player"))
     local isOfficer = RaidTrack.IsOfficer and RaidTrack.IsOfficer() or false
 
+    -- pozwól każdemu członkowi gildii wysyłać (upserty); RAID tylko gdy RL/Asystent i allowRaid
     if not inGuild and not (opts.allowRaid and canRaid) then
         return
     end
@@ -120,20 +121,17 @@ function RaidTrack.SendRaidSyncData(opts)
     local serialized = RaidTrack.SafeSerialize(payload)
     if not serialized then return end
 
-    -- Kanał: aktywny raid -> RAID; brak aktywnego -> GUILD (jeśli w gildii), inaczej RAID
+    -- Kanał: aktywny → RAID; inaczej → GUILD (dla każdego w gildii)
     local channel = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
+    RaidTrack.QueueChunkedSend(nil, "RTSYNC", serialized, channel)
 
-    -- KLUCZOWE: przekaż unikalny ID do chunkera, żeby nagłówek brzmiał np.:
-    -- RTCHUNK^<msgId>^<index>^<total>^<chunkData>
-    -- (Jeśli Twój QueueChunkedSend już to obsługuje — a sygnatura z 1. paramem na to wskazuje — użyjemy raidSyncID)
-    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
-
-    -- po udanym wysłaniu oficer czyści własne tombstony
+    -- oficer czyści swoje tombstony po wysyłce
     if isOfficer then
         if #removedPresets > 0 then RaidTrackDB._presetTombstones = {} end
         if #removedInstances > 0 then RaidTrackDB._instanceTombstones = {} end
     end
 end
+
 
 
 

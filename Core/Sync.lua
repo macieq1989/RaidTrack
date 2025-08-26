@@ -915,7 +915,6 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         return
     end
 
-    -- Parsuj TYLKO nagłówek; resztę (chunkData) bierz w całości
     -- Format legacy: RTCHUNK^<idx>^<total>^<chunkData>
     local idx, total, chunkData = message:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
     if not idx or not total or not chunkData then
@@ -923,33 +922,32 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
     end
     idx   = tonumber(idx)
     total = tonumber(total)
+    if not idx or not total then return end
 
-    -- Bufor per-nadawca; gdy sender bywa pusty, użyj bezpiecznego klucza
+    -- Bufor per-nadawca (zabezpieczenie gdy sender pusty)
     sender = (sender and sender ~= "") and sender or "UNKNOWN"
     RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
     local key = sender .. "_RTSYNC"
 
-    -- Jeśli to pierwszy chunk nowej paczki – wyczyść poprzedni bufor
+    -- Start nowej paczki? Wyzeruj bufor
     if idx == 1 or type(RaidTrack._chunkBuffers[key]) ~= "table" then
         RaidTrack._chunkBuffers[key] = {}
     end
     local buf = RaidTrack._chunkBuffers[key]
-
-    -- Zapisz kawałek pod jego numerem
     buf[idx] = chunkData
 
-    -- Sprawdź kompletność 1..total
+    -- komplet?
     for i = 1, total do
         if not buf[i] then
             return -- czekamy na resztę
         end
     end
 
-    -- Sklej w odpowiedniej kolejności i oczyść bufor
+    -- sklej i wyczyść
     local full = table.concat(buf, "")
     RaidTrack._chunkBuffers[key] = nil
 
-    -- Deserializacja surowego AceSerializera
+    -- deserializacja
     local ok, data = RaidTrack.SafeDeserialize(full)
     if not ok or not data then
         if RaidTrack.AddDebugMessage then
@@ -969,6 +967,7 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         RaidTrack.MergeRaidSyncData(data, sender)
     end
 end
+
 
 
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
