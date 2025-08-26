@@ -109,23 +109,26 @@ function RaidTrack.CreateRaidInstance(name, zone, presetName, forcedId)
 end
 
 function RaidTrack.EndActiveRaid()
-    local id = RaidTrack.activeRaidID
+    local id = RaidTrack.activeRaidID or RaidTrackDB.activeRaidID
     if not id then
-        RaidTrack.AddDebugMessage("No active raid to end.")
+        if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("No active raid to end.") end
         return
     end
 
-    -- Full Attendance (before we clear active)
+    -- One-time Full Attendance (before clearing active)
     if RaidTrack.AwardFullAttendanceIfNeededAtEnd then
         RaidTrack.AwardFullAttendanceIfNeededAtEnd()
     end
 
-    -- Mark 'ended' in raidInstances
+    local now = time()
+
+    -- Mark 'ended' in raidInstances (set both ended + endAt for consistency)
     if RaidTrackDB and RaidTrackDB.raidInstances then
         for _, r in ipairs(RaidTrackDB.raidInstances) do
             if tostring(r.id) == tostring(id) then
                 r.status = "ended"
-                r.ended  = time()
+                r.ended  = r.ended  or now
+                r.endAt  = r.endAt  or r.ended
                 break
             end
         end
@@ -136,12 +139,14 @@ function RaidTrack.EndActiveRaid()
         for _, h in ipairs(RaidTrackDB.raidHistory) do
             if tostring(h.id) == tostring(id) then
                 h.status = "ended"
-                h.ended  = time()
+                h.ended  = h.ended  or now
+                h.endAt  = h.endAt  or h.ended
                 break
             end
         end
     end
 
+    -- Clear local active state
     RaidTrack.activeRaidID      = nil
     RaidTrackDB.activeRaidID    = nil
     RaidTrack.currentRaidConfig = nil
@@ -150,10 +155,19 @@ function RaidTrack.EndActiveRaid()
         RaidTrack.AddDebugMessage("Raid ended: " .. tostring(id))
     end
 
-    if RaidTrack.RefreshRaidDropdown then RaidTrack.RefreshRaidDropdown() end
-    if RaidTrack.UpdateRaidTabStatus then RaidTrack.UpdateRaidTabStatus() end
-    if RaidTrack.BroadcastRaidSync then RaidTrack.BroadcastRaidSync() end
+    -- UI refresh
+    if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
+    if RaidTrack.UpdateRaidTabStatus then pcall(RaidTrack.UpdateRaidTabStatus) end
+
+    -- Broadcast a dedicated "ended" snapshot on GUILD so offline clients learn about it on login
+    if RaidTrack.BroadcastRaidEnded then
+        pcall(RaidTrack.BroadcastRaidEnded, tostring(id), now)
+    else
+        -- fallback if helper not present
+        if RaidTrack.BroadcastRaidSync then pcall(RaidTrack.BroadcastRaidSync) end
+    end
 end
+
 
 
 function RaidTrack.RegisterBossKill(bossName)

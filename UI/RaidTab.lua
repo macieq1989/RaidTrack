@@ -507,7 +507,7 @@ local parent = (container and container.frame)
         RaidTrack.RefreshRaidDropdown()
 
         RaidTrack.UpdateRaidTabStatus()
-        RaidTrack.BroadcastRaidSync()
+       
 
     end)
     controlsScroll:AddChild(endBtn)
