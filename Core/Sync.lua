@@ -638,11 +638,6 @@ af:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
 
 end)
 
--- Jeśli masz funkcję zadeklarowaną bezpośrednio:
--- function RaidTrack.SendSyncData() ... end
--- to nic nie rób – już działa.
-
--- Ale jeśli nie masz jej wcale (a była wcześniej), dodaj ją z powrotem:
 -- Jeśli msgId==nil -> LEGACY: RTCHUNK^<idx>^<total>^<chunk>
 -- Jeśli msgId  jest -> NOWY:   RTCHUNK^<msgId>^<idx>^<total>^<chunk>
 function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel)
@@ -658,19 +653,40 @@ function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel)
     if total < 1 then total = 1 end
 
     local useNew = (type(msgId) == "string" and msgId ~= "")
+    local CTL = _G.ChatThrottleLib  -- użyj jeśli jest
 
-    for i = 1, total do
+    local function build(i)
         local s = (i - 1) * MAX + 1
         local part = payload:sub(s, s + MAX - 1)
-        local msg
         if useNew then
-            msg = ("RTCHUNK^%s^%d^%d^%s"):format(msgId, i, total, part)
+            return ("RTCHUNK^%s^%d^%d^%s"):format(msgId, i, total, part)
         else
-            msg = ("RTCHUNK^%d^%d^%s"):format(i, total, part)
+            return ("RTCHUNK^%d^%d^%s"):format(i, total, part)
         end
-        C_ChatInfo.SendAddonMessage(prefix, msg, channel)
+    end
+
+    if CTL and CTL.SendAddonMessage then
+        -- Użyj biblioteki throttlingu: BULK dla >5 chunków
+        local prio = (total > 5) and "BULK" or "NORMAL"
+        for i = 1, total do
+            CTL:SendAddonMessage(prio, prefix, build(i), channel)
+        end
+    else
+        -- Awaryjnie: rozłóż wysyłkę w czasie (eliminuje burst)
+        local gap = (total > 5) and 0.05 or 0.0
+        for i = 1, total do
+            local msg = build(i)
+            if gap > 0 then
+                C_Timer.After((i - 1) * gap, function()
+                    C_ChatInfo.SendAddonMessage(prefix, msg, channel)
+                end)
+            else
+                C_ChatInfo.SendAddonMessage(prefix, msg, channel)
+            end
+        end
     end
 end
+
 
 
 

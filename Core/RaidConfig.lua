@@ -118,10 +118,13 @@ function RaidTrack.DeleteRaidPreset(name)
         RaidTrack.AddDebugMessage("Tombstoned non-existing preset (for propagation): " .. name)
     end
 
-    -- Rozgłoś natychmiast po lokalnym usunięciu
-    if RaidTrack.SendRaidSyncData then
+    -- Batch flush (unikamy floodu przy wielu kasowaniach)
+    if RaidTrack.RequestRaidSyncFlush then
+        RaidTrack.RequestRaidSyncFlush(0.5)
+    elseif RaidTrack.SendRaidSyncData then
         RaidTrack.SendRaidSyncData()
     end
+
 end
 
 

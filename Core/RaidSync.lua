@@ -56,6 +56,35 @@ function RaidTrack.ReconcileActiveRaidDCGuard()
         if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
     end
 end
+-- Throttle'owane odświeżenie UI po sync
+RaidTrack._uiRefreshPending = false
+function RaidTrack.RequestUIRefresh(reason)
+    if RaidTrack._uiRefreshPending then return end
+    RaidTrack._uiRefreshPending = true
+    C_Timer.After(0.15, function()
+        RaidTrack._uiRefreshPending = false
+        -- Odśwież to, co masz w addon'ie (pcall = bezpiecznie jeśli czegoś nie ma)
+        if RaidTrack.RefreshRaidDropdown   then pcall(RaidTrack.RefreshRaidDropdown)   end
+        if RaidTrack.UpdateRaidTabStatus   then pcall(RaidTrack.UpdateRaidTabStatus)   end
+        if RaidTrack.RefreshRaidTab        then pcall(RaidTrack.RefreshRaidTab)        end
+        if RaidTrack.RefreshPresetDropdown then pcall(RaidTrack.RefreshPresetDropdown) end
+        if RaidTrack.RefreshBossesView     then pcall(RaidTrack.RefreshBossesView)     end
+    end)
+end
+
+-- Debounce/Batch flush RTSYNC (żeby nie floodować serwera)
+RaidTrack._rs_flushScheduled = false
+function RaidTrack.RequestRaidSyncFlush(delay)
+    delay = tonumber(delay) or 0.4  -- 400 ms ok do “złapania” serii delete/save
+    if RaidTrack._rs_flushScheduled then return end
+    RaidTrack._rs_flushScheduled = true
+    C_Timer.After(delay, function()
+        RaidTrack._rs_flushScheduled = false
+        if RaidTrack.SendRaidSyncData then
+            pcall(RaidTrack.SendRaidSyncData)
+        end
+    end)
+end
 
 -----------------------------------------------------
 -- Send: build and broadcast RTSYNC payload
@@ -316,8 +345,15 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
     end
 
     -- UI
+ -- UI (throttle'owane)
+if RaidTrack.RequestUIRefresh then
+    RaidTrack.RequestUIRefresh("RaidSync.Apply")
+else
+    -- fallback gdyby helpera nie było
     if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
     if RaidTrack.UpdateRaidTabStatus then pcall(RaidTrack.UpdateRaidTabStatus) end
+end
+
 
     -- UWAGA: brak rebroadcastu z Apply (eliminuje echo/ping-pong)
     return changed and true or false
