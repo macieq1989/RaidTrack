@@ -910,60 +910,59 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
     end
 end
 
+
 -- Funkcja obsługująca odebrane chunki RAID SYNC
 function RaidTrack.HandleChunkedRaidPiece(sender, message)
-    if not message:find("^RTCHUNK") then
+    -- literalny check (nie używamy wzorca dla '^')
+    if type(message) ~= "string" or not message:find("RTCHUNK^", 1, true) then
         return
     end
 
-    local parts = {strsplit("^", message)}
-    local _, chunkNum, totalChunks, chunkData = unpack(parts)
-
+    -- wyciągnij 3 pierwsze pola; reszta to surowy AceSerializer (może zawierać '^')
+    local chunkNum, totalChunks, chunkData = message:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
+    if not chunkNum or not totalChunks or not chunkData then
+        return
+    end
     chunkNum = tonumber(chunkNum)
     totalChunks = tonumber(totalChunks)
 
-    local key = sender .. "_RTSYNC"
-    RaidTrack._chunkBuffers[key] = RaidTrack._chunkBuffers[key] or {}
-    RaidTrack._chunkBuffers[key][chunkNum] = chunkData
+    -- bufor per-nadawca
+    local key = (tostring(sender or "?") .. "_RTSYNC")
+    RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
+    local buf = RaidTrack._chunkBuffers[key] or {}
+    buf[chunkNum] = chunkData
+    RaidTrack._chunkBuffers[key] = buf
 
-    -- Sprawdzenie kompletności
-    local buffer = RaidTrack._chunkBuffers[key]
-    local count = 0
+    -- komplet?
     for i = 1, totalChunks do
-        if buffer[i] then
-            count = count + 1
+        if not buf[i] then
+            return
         end
     end
 
-    if count == totalChunks then
+    -- sklej i rozkoduj
+    local full = table.concat(buf, "")
+    RaidTrack._chunkBuffers[key] = nil
 
-        local full = table.concat(buffer, "")
-        RaidTrack._chunkBuffers[key] = nil
+    local ok, data = RaidTrack.SafeDeserialize(full)
+    if ok and data then
+        -- bezpiecznik: nie aktywuj raidu poza raid grupą
+        if data.activeID and not IsInRaid() then
+            data.activeID, data.activePreset, data.activeConfig = nil, nil, nil
+        end
 
-        local ok, data = RaidTrack.SafeDeserialize(full)
-        if ok then
-
-            -- Core/Sync.lua (wewnątrz HandleChunkedRaidPiece, PO deserializacji)
-            if ok and data then
-                -- 🔒 Bezpiecznik: nie ustawiaj aktywnego raidu u osób niebędących w raidzie
-                if data.activeID and not IsInRaid() then
-                    -- Wyczyść activeID, żeby odbiorca spoza raidu nie przełączał currentRaidConfig
-                    data.activeID = nil
-                end
-
-                RaidTrack.MergeRaidSyncData(data, sender)
-            else
-                RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. sender)
-            end
-
+        if RaidTrack.ApplyRaidSyncData then
+            RaidTrack.ApplyRaidSyncData(data, sender)
+        elseif RaidTrack.MergeRaidSyncData then
             RaidTrack.MergeRaidSyncData(data, sender)
-        else
-            RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. sender)
-            RaidTrack.AddDebugMessage("Deserialize failed: " .. tostring(data))
-
+        end
+    else
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. tostring(sender))
         end
     end
 end
+
 
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
 

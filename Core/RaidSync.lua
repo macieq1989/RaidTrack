@@ -299,10 +299,14 @@ end)
 -- Legacy compatibility shim (was in your file)
 -- Ensure no duplicate logic diverges.
 -----------------------------------------------------
+
 function RaidTrack.MergeRaidSyncData(data, sender)
-    -- Przekieruj do nowej, bezpiecznej ścieżki
-    RaidTrack.ApplyRaidSyncData(data, sender)
+    -- wsteczna kompatybilność nazwy
+    if RaidTrack.ApplyRaidSyncData then
+        RaidTrack.ApplyRaidSyncData(data, sender)
+    end
 end
+
 
 -----------------------------------------------------
 -- Startup: reconcile DC guard on login (in case no sync arrives)
