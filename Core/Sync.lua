@@ -653,28 +653,29 @@ function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel)
     end
     channel = channel or "GUILD"
 
-    -- Upewnij się, że prefix zarejestrowany
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
         pcall(C_ChatInfo.RegisterAddonMessagePrefix, prefix)
     end
 
-    -- Bezpieczny rozmiar – zostaw margines na nagłówek
     local MAX = (CHUNK_SIZE and tonumber(CHUNK_SIZE)) or 200
     if MAX < 50 then MAX = 50 end
-
-    -- msgId do nagłówka
-    if not msgId or msgId == "" then
-        msgId = ("LEGACY-%d-%d"):format(time(), math.random(10000, 99999))
-    end
 
     local total = math.ceil(#payload / MAX)
     if total < 1 then total = 1 end
 
+    local useNewHeader = (type(msgId) == "string" and msgId ~= "")
+
     for i = 1, total do
         local startPos = (i - 1) * MAX + 1
         local part = payload:sub(startPos, startPos + MAX - 1)
-        -- UWAGA: nie dodajemy żadnych \n, nie robimy gsub – surowy AceSerializer fragment!
-        local msg = ("RTCHUNK^%s^%d^%d^%s"):format(tostring(msgId), i, total, part)
+        local msg
+        if useNewHeader then
+            -- NOWY format z msgId (dla RTSYNC)
+            msg = ("RTCHUNK^%s^%d^%d^%s"):format(msgId, i, total, part)
+        else
+            -- LEGACY format (dla EPGP/loot i reszty)
+            msg = ("RTCHUNK^%d^%d^%s"):format(i, total, part)
+        end
         C_ChatInfo.SendAddonMessage(prefix, msg, channel)
     end
 end
@@ -936,7 +937,7 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
 
     local msgId, idx, total, chunkData
 
-    -- Spróbuj format z msgId
+    -- 1) Spróbuj NOWY format: RTCHUNK^<msgId>^<idx>^<total>^<chunkData>
     do
         local a = message:find("^", 8, true)                 -- po 'RTCHUNK^'
         if a then
@@ -952,13 +953,13 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         end
     end
 
-    -- Wstecznie: bez msgId (RTCHUNK^idx^total^data)
+    -- 2) LEGACY: RTCHUNK^<idx>^<total>^<chunkData>
     if not (msgId and idx and total and chunkData) then
         local a = message:find("^", 8, true)
         local b = a and message:find("^", a + 1, true) or nil
         local c = b and message:find("^", b + 1, true) or nil
         if a and b and c then
-            msgId     = ("LEGACY-%d-%d"):format(time(), math.random(10000,99999))
+            msgId     = "LEGACY"
             idx       = tonumber(message:sub(a + 1, b - 1))
             total     = tonumber(message:sub(b + 1, c - 1))
             chunkData = message:sub(c + 1)
@@ -969,25 +970,29 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         return
     end
 
-    -- Buffer per msgId (nie polegamy na sender, bo bywa pusty)
+    -- Buforuj per wiadomość (dla LEGACY też separujemy per-nadawca)
     RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
-    local key = "RTSYNC@" .. tostring(msgId)
+    local key = (msgId == "LEGACY")
+        and ("RT@" .. tostring(sender or "?"))
+        and ("RT@" .. tostring(msgId))  -- (ta linia zostanie nadpisana zaraz niżej, ale zachowujemy czytelność)
+    if msgId == "LEGACY" then
+        key = "RT@" .. tostring(sender or "?")
+    else
+        key = "RT@" .. tostring(msgId)
+    end
+
     local buf = RaidTrack._chunkBuffers[key] or {}
     buf[idx] = chunkData
     RaidTrack._chunkBuffers[key] = buf
 
-    -- komplet?
+    -- Czy komplet?
     for i = 1, total do
-        if not buf[i] then
-            return
-        end
+        if not buf[i] then return end
     end
 
-    -- sklej i wyczyść
     local full = table.concat(buf, "")
     RaidTrack._chunkBuffers[key] = nil
 
-    -- deserializacja
     local ok, data = RaidTrack.SafeDeserialize(full)
     if not ok or not data then
         if RaidTrack.AddDebugMessage then
@@ -996,11 +1001,12 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         return
     end
 
-    -- Bezpiecznik: brak aktywacji raidu poza grupą
+    -- Bezpiecznik aktywnego raidu dla osób spoza raidu
     if data.activeID and not IsInRaid() then
         data.activeID, data.activePreset, data.activeConfig = nil, nil, nil
     end
 
+    -- Przekazanie do właściwej logiki (np. ApplyRaidSyncData dla RTSYNC)
     if RaidTrack.ApplyRaidSyncData then
         RaidTrack.ApplyRaidSyncData(data, sender)
     elseif RaidTrack.MergeRaidSyncData then
