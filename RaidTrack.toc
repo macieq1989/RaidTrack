@@ -1,7 +1,7 @@
 ## Interface: 110105
 ## Title: RaidTrack
 ## Notes: Raid, Loot and EPGP Tracker
-## Version: 1.0
+## Version: 3.3b
 ## SavedVariables: RaidTrackDB
 
 ## OptionalDeps: Ace3, Blizzard_UIPanelMenus
@@ -43,6 +43,7 @@ Libs/Ace3/AceGUI-3.0/widgets/AceGUIWidget-Slider.lua
 Core/Debug.lua
 Core.lua
 Core/Util.lua
+Core\Version.lua
 Core/Database.lua
 Core/EPGP.lua
 Core/Sync.lua

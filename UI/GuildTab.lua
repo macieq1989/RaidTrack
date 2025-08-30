@@ -128,7 +128,8 @@ guildTabData.visibleRows = {}
     header:SetLayout("Flow")
     header:SetFullWidth(true)
     header:SetHeight(24)
-    for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}}) do
+    for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}, {"RT", 44}}) do
+
 
     local lbl = AceGUI:Create("Label")
     lbl:SetText(h[1])
@@ -174,28 +175,34 @@ RaidTrack.ApplyHighlight(row, IsSelected(d.name))
             }
         end
 
-        local fields = {{
-            text = d.name,
-            width = 140
-        }, {
-            text = d.ep,
-            width = 60
-        }, {
-            text = d.gp,
-            width = 60
-        }, {
-            text = string.format("%.2f", d.pr),
-            width = 60
-        }}
+      -- pobierz wersję klienta (zielony = zgodny, żółty = starszy, szary = brak danych)
+local verText, verColor = "-", { r = 0.70, g = 0.70, b = 0.70 }
+if RaidTrack.GetCachedClientVersion then
+    local v, c = RaidTrack.GetCachedClientVersion(d.name)
+    if v then verText = v end
+    if c then verColor = c end
+end
+
+local fields = {
+    { text = d.name,                   width = 140 },
+    { text = d.ep,                     width = 60  },
+    { text = d.gp,                     width = 60  },
+    { text = string.format("%.2f", d.pr), width = 60  },
+    -- nowa kolumna „RT” z wersją i własnym kolorem
+    { text = verText,                  width = 44,  overrideColor = verColor },
+}
+
         for _, field in ipairs(fields) do
     local lbl = AceGUI:Create("Label")
     lbl:SetText(tostring(field.text))
     lbl:SetWidth(field.width)
     lbl:SetJustifyH("CENTER")
     lbl:SetFontObject(GameFontNormal)
-    lbl:SetColor(col.r, col.g, col.b)
+    local useCol = field.overrideColor or col
+    lbl:SetColor(useCol.r, useCol.g, useCol.b)
     row:AddChild(lbl)
 end
+
 
 
         row.frame:SetScript("OnMouseDown", function()
