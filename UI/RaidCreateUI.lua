@@ -12,30 +12,42 @@ local function BuildPresetList()
 end
 
 -- Helper: sort raids by status and time
-local STATUS_ORDER = { started = 1, created = 2, ended = 3 }
+local STATUS_ORDER = {
+    started = 1,
+    created = 2,
+    ended = 3
+}
 
 local function SortRaids(list)
     table.sort(list, function(a, b)
         local sa = STATUS_ORDER[a.status or "created"] or 2
         local sb = STATUS_ORDER[b.status or "created"] or 2
-        if sa ~= sb then return sa < sb end
+        if sa ~= sb then
+            return sa < sb
+        end
 
         -- inside the same status group
         if a.status == "started" then
             -- newest started first
             local ta = tonumber(a.started or 0) or 0
             local tb = tonumber(b.started or 0) or 0
-            if ta ~= tb then return ta > tb end
+            if ta ~= tb then
+                return ta > tb
+            end
         elseif a.status == "created" then
             -- earliest planned first
             local ta = tonumber(a.scheduledAt or math.huge) or math.huge
             local tb = tonumber(b.scheduledAt or math.huge) or math.huge
-            if ta ~= tb then return ta < tb end
+            if ta ~= tb then
+                return ta < tb
+            end
         elseif a.status == "ended" then
             -- newest ended first
             local ta = tonumber(a.ended or 0) or 0
             local tb = tonumber(b.ended or 0) or 0
-            if ta ~= tb then return ta > tb end
+            if ta ~= tb then
+                return ta > tb
+            end
         end
 
         -- tie‑breakers
@@ -45,7 +57,9 @@ end
 
 -- Public: allow other windows (Config) to refresh this dropdown live
 function RaidTrack.RefreshCreateRaidPresetDropdown()
-    if not RaidTrack._createPresetDD then return end
+    if not RaidTrack._createPresetDD then
+        return
+    end
     local keep = RaidTrack._createPresetDD:GetValue()
     local list = BuildPresetList()
     RaidTrack._createPresetDD:SetList(list)
@@ -110,10 +124,19 @@ function RaidTrack:OpenRaidCreationWindow()
 
     local function ParseDateTime(dstr, tstr)
         local Y, M, D = tostring(dstr or ""):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
-        local h, m    = tostring(tstr or ""):match("^(%d%d):(%d%d)$")
-        Y,M,D,h,m = tonumber(Y),tonumber(M),tonumber(D),tonumber(h),tonumber(m)
-        if not (Y and M and D and h and m) then return nil end
-        return time({year=Y, month=M, day=D, hour=h, min=m, sec=0})
+        local h, m = tostring(tstr or ""):match("^(%d%d):(%d%d)$")
+        Y, M, D, h, m = tonumber(Y), tonumber(M), tonumber(D), tonumber(h), tonumber(m)
+        if not (Y and M and D and h and m) then
+            return nil
+        end
+        return time({
+            year = Y,
+            month = M,
+            day = D,
+            hour = h,
+            min = m,
+            sec = 0
+        })
     end
 
     local confirmBtn = AceGUI:Create("Button")
@@ -200,7 +223,11 @@ function RaidTrack:OpenRaidCreationWindow()
 
         local actionDD = AceGUI:Create("Dropdown")
         actionDD:SetWidth(120)
-        actionDD:SetList({ Edit = "Edit", Start = "Start", Delete = "Delete" })
+        actionDD:SetList({
+            Edit = "Edit",
+            Start = "Start",
+            Delete = "Delete"
+        })
         actionDD:SetText("Actions")
 
         actionDD:SetCallback("OnValueChanged", function(_, _, value)
@@ -214,25 +241,31 @@ function RaidTrack:OpenRaidCreationWindow()
                 RaidTrackDB.activeRaidID = raid.id
 
                 -- keep history entry; if your CreateRaidInstance accepts id, pass it
-                RaidTrack.CreateRaidInstance(raid.name, GetRealZoneText() or "Unknown Zone", raid.preset, raid.id)
+                if RaidTrack.RequestRaidSyncFlush then
+                    RaidTrack.RequestRaidSyncFlush(0.25)
+                else
+                    RaidTrack.SendRaidSyncData()
+                end
 
                 RaidTrack.RefreshRaidDropdown()
                 RaidTrack.UpdateRaidTabStatus()
                 frame:Hide()
 
             elseif value == "Delete" then
-                for i, r in ipairs(RaidTrackDB.raidInstances) do
-                    if r.id == raid.id then
-                        table.remove(RaidTrackDB.raidInstances, i)
-                        break
-                    end
+                if RaidTrack.DeleteRaidInstance then
+                    RaidTrack.DeleteRaidInstance(raid.id)
                 end
-                RaidTrack.RefreshRaidDropdown()
-                RaidTrack.UpdateRaidTabStatus()
+                if RaidTrack.RefreshRaidDropdown then
+                    pcall(RaidTrack.RefreshRaidDropdown)
+                end
+                if RaidTrack.UpdateRaidTabStatus then
+                    pcall(RaidTrack.UpdateRaidTabStatus)
+                end
                 frame:Hide()
                 RaidTrack.raidCreateWindow = nil
                 RaidTrack:OpenRaidCreationWindow()
             end
+
         end)
 
         group:AddChild(actionDD)

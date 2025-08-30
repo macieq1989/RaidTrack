@@ -126,16 +126,41 @@ function RaidTrack.DeleteRaidPreset(name)
     end
 
     -- ZAWSZE wystaw tombstone (żeby inni usunęli)
-    RaidTrackDB._presetTombstones[name] = true
+    RaidTrackDB._presetTombstones[name] = time()
 
     -- Batch flush (unikamy floodu przy serii kasowań)
     if RaidTrack.RequestRaidSyncFlush then
+    RaidTrack.RequestRaidSyncFlush(0.25)
+else
+    RaidTrack.SendRaidSyncData() -- fallback, gdyby flush nie istniał
+end
+end
+
+function RaidTrack.DeleteRaidInstance(id)
+    if not id then return end
+    id = tostring(id)
+
+    RaidTrackDB.raidInstances       = RaidTrackDB.raidInstances or {}
+    RaidTrackDB._instanceTombstones = RaidTrackDB._instanceTombstones or {}
+
+    -- usuń z „live”
+    for idx, inst in ipairs(RaidTrackDB.raidInstances) do
+        if tostring(inst.id) == id then
+            table.remove(RaidTrackDB.raidInstances, idx)
+            break
+        end
+    end
+
+    -- ustaw tombstone z timestampem
+    RaidTrackDB._instanceTombstones[id] = time()
+
+    -- spójny broadcast jak przy presetach
+    if RaidTrack.RequestRaidSyncFlush then
         RaidTrack.RequestRaidSyncFlush(0.5)
-    elseif RaidTrack.SendRaidSyncData then
+    else
         RaidTrack.SendRaidSyncData()
     end
 end
-
 
 
 
