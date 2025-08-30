@@ -82,12 +82,17 @@ function RaidTrack.SaveRaidPreset(name, config)
     end
 
     -- odśwież UI i wyślij sync batched
-    if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
-    if RaidTrack.RequestRaidSyncFlush then
-        RaidTrack.RequestRaidSyncFlush(0.35)
-    elseif RaidTrack.SendRaidSyncData then
-        RaidTrack.SendRaidSyncData()
-    end
+    -- odśwież UI
+if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
+
+-- natychmiast wyślij na GUILD (i RAID jeśli jesteś w raidzie)
+if RaidTrack.SendRaidSyncData then
+    RaidTrack.SendRaidSyncData({ alwaysGuild = true })
+elseif RaidTrack.RequestRaidSyncFlush then
+    -- fallback gdyby powyższe nie istniało
+    RaidTrack.RequestRaidSyncFlush(0.35)
+end
+
 end
 
 ----------------------------------------------
@@ -129,11 +134,13 @@ function RaidTrack.DeleteRaidPreset(name)
     RaidTrackDB._presetRevisions[name]  = nil
 
     -- batch flush
-    if RaidTrack.RequestRaidSyncFlush then
-        RaidTrack.RequestRaidSyncFlush(0.25)
-    elseif RaidTrack.SendRaidSyncData then
-        RaidTrack.SendRaidSyncData()
-    end
+   -- natychmiast wyślij na GUILD (i RAID jeśli jesteś w raidzie)
+if RaidTrack.SendRaidSyncData then
+    RaidTrack.SendRaidSyncData({ alwaysGuild = true })
+elseif RaidTrack.RequestRaidSyncFlush then
+    RaidTrack.RequestRaidSyncFlush(0.25)
+end
+
 end
 
 ----------------------------------------------

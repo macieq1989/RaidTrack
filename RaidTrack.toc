@@ -1,7 +1,7 @@
 ## Interface: 110105
 ## Title: RaidTrack
 ## Notes: Raid, Loot and EPGP Tracker
-## Version: 3.3b2
+## Version: 3.3b3
 ## SavedVariables: RaidTrackDB
 
 ## OptionalDeps: Ace3, Blizzard_UIPanelMenus

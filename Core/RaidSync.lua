@@ -164,16 +164,22 @@ function RaidTrack.SendRaidSyncData(opts)
     local serialized = RaidTrack.SafeSerialize(payload)
     if not serialized then return end
 
-    -- Kanał: aktywny -> RAID, inaczej -> GUILD (jeśli w gildii)
-    local hasDeletes = (removedPresets ~= nil) or (removedInstances ~= nil)
-    local channel    = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
+   -- Kanały wyjściowe
+local hasDeletes = (removedPresets ~= nil) or (removedInstances ~= nil)
+local wantRaid  = activeID and (opts.allowRaid ~= false)
+-- zawsze GUILD gdy:
+--  - nie ma aktywnego raidu (standard),
+--  - są kasowania,
+--  - LUB ktoś jawnie wymusi (np. zapis/usu­nięcie presetu)
+local wantGuild = inGuild and (opts.alwaysGuild or not activeID or hasDeletes)
 
-    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
+if wantRaid then
+    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "RAID")
+end
+if wantGuild then
+    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "GUILD")
+end
 
-    -- jeżeli raid trwa i są delet’y, doślij też na GUILD (offline’y to odbiorą)
-    if activeID and hasDeletes and inGuild then
-        RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "GUILD")
-    end
 end
 
 -- Szybki publiczny helper do broadcastu (np. po end raidu)
