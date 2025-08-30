@@ -3,15 +3,17 @@ local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
 RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
 
--- ================== KONFIG / STAŁE ==================
-local CHUNK_SIZE = 220 -- odrobinę większe, mniej chunków
-local SYNC_PREFIX = "RaidTrackSync"
+-- ========= STAŁE =========
+local CHUNK_SIZE = 220
+local SYNC_PREFIX = "RaidTrackSync" -- EPGP/loot FULL/DELTA (WHISPER)
+local AU_PREFIX = "auction" -- aukcje (RAID broadcast)
+local RTS_PREFIX = "RTSYNC" -- raid-presets (obsługiwane w RaidSync.lua)
 
 C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix("auction")
-C_ChatInfo.RegisterAddonMessagePrefix("RTSYNC")
+C_ChatInfo.RegisterAddonMessagePrefix(AU_PREFIX)
+C_ChatInfo.RegisterAddonMessagePrefix(RTS_PREFIX)
 
--- DB guards
+-- ========= DB GUARDS =========
 RaidTrackDB = RaidTrackDB or {}
 RaidTrackDB.settings = RaidTrackDB.settings or {}
 RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
@@ -25,84 +27,72 @@ RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
 
 RaidTrack.pendingSends = RaidTrack.pendingSends or {}
 RaidTrack.chunkBuffer = RaidTrack.chunkBuffer or {}
-RaidTrack.syncTimer = RaidTrack.syncTimer or nil
-RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
 
--- ===== Wipe / CFG state =====
-RaidTrack._cfgSeen = RaidTrack._cfgSeen or false -- mamy już jakieś CFG od oficera
-RaidTrack._pendingWipe = RaidTrack._pendingWipe or false -- czekamy na FULL z nie-pustym EPGP
-RaidTrack._lastCfgFrom = RaidTrack._lastCfgFrom or nil -- kto ostatnio wysłał CFG
-RaidTrack._lastAppliedFullSig = RaidTrack._lastAppliedFullSig or "" -- podpis FULL: wipeID|lastEP|maxLoot
-
--- =============== LibDeflate (kompresja) ===============
-local LD = (LibStub and LibStub("LibDeflate", true)) or _G.LibDeflate
-
--- Używamy wspólnych helperów, jeśli nie istnieją (żeby nie kolidować z innymi plikami)
-if not RaidTrack.MaybeCompress then
-    function RaidTrack.MaybeCompress(s)
-        if not LD or type(s) ~= "string" or #s < 400 then
-            return s, false
-        end
-        local c = LD:CompressDeflate(s, {
-            level = 5
-        })
-        local enc = LD:EncodeForWoWAddonChannel(c)
-        -- marker \001 => „skompresowane + zakodowane”
-        return "\001" .. enc, true
-    end
+-- ========= AceSerializer wrappers (bez kompresji) =========
+local AceSer = LibStub and LibStub("AceSerializer-3.0", true)
+if not AceSer then
+    error("RaidTrack: AceSerializer-3.0 is required")
 end
 
-if not RaidTrack.MaybeDecompress then
-    function RaidTrack.MaybeDecompress(s)
-        if type(s) ~= "string" or s:sub(1, 1) ~= "\001" or not LD then
-            return s, false
-        end
-        local dec = LD:DecodeForWoWAddonChannel(s:sub(2))
-        if not dec then
-            return s, false
-        end
-        local raw = LD:DecompressDeflate(dec)
-        return (raw or s), true
+function RaidTrack.SafeSerialize(tbl)
+    local ok, s = pcall(AceSer.Serialize, AceSer, tbl)
+    if ok and type(s) == "string" then
+        return s
     end
+    return nil
 end
 
--- =============== ChatThrottleLib wrapper ===============
+function RaidTrack.SafeDeserialize(s)
+    local ok, a, b, c, d, e, f = pcall(AceSer.Deserialize, AceSer, s)
+    if not ok or not a then
+        return false
+    end
+    -- AceSerializer zwraca: true, data
+    return true, b
+end
+
+-- NO-OP kompresja (przywrócenie starego transportu)
+RaidTrack.MaybeCompress = function(s)
+    return s, false
+end
+RaidTrack.MaybeDecompress = function(s)
+    return s, false
+end
+
+-- ========= ChatThrottle wrapper =========
 local CTL = _G.ChatThrottleLib
-local function _SendAddonMessage(prefix, msg, channel, target, priority)
-    priority = priority or "NORMAL"
+local function SEND(prefix, msg, channel, target, prio)
+    prio = prio or "NORMAL"
     if CTL and CTL.SendAddonMessage then
-        CTL:SendAddonMessage(priority, prefix, msg, channel, target)
+        CTL:SendAddonMessage(prio, prefix, msg, channel, target)
     else
         C_ChatInfo.SendAddonMessage(prefix, msg, channel, target)
     end
 end
 
--- =============== Rejestr odbiorników CHUNK ===============
-if not C_ChatInfo.IsAddonMessagePrefixRegistered("auction") then
-    C_ChatInfo.RegisterAddonMessagePrefix("auction")
-end
-
+-- ========= Rejestr handlerów chunków =========
 function RaidTrack.RegisterChunkHandler(prefix, handler)
-    RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
     RaidTrack.chunkHandlers[prefix] = handler
 end
 
-local genericCommFrame = CreateFrame("Frame")
-genericCommFrame:RegisterEvent("CHAT_MSG_ADDON")
-genericCommFrame:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
+local commFrame = CreateFrame("Frame")
+commFrame:RegisterEvent("CHAT_MSG_ADDON")
+commFrame:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
     if not prefix or not message then
         return
     end
-    if RaidTrack.chunkHandlers and RaidTrack.chunkHandlers[prefix] then
-        RaidTrack.chunkHandlers[prefix](sender, message)
+    local h = RaidTrack.chunkHandlers[prefix]
+    if h then
+        h(sender, message, channel)
     end
 end)
 
-RaidTrack.RegisterChunkHandler("auction", function(sender, message)
+-- Aukcje: rejestruj odbiornik chunków
+RaidTrack.RegisterChunkHandler(AU_PREFIX, function(sender, message, channel)
     RaidTrack.HandleChunkedAuctionPiece(sender, message)
 end)
 
--- =============== Harmonogram małych flushy (trailing) ===============
+-- ========= SYNC (harmonogram małych flushy) =========
 function RaidTrack.ScheduleSync()
     if RaidTrack.syncTimer then
         RaidTrack.syncTimer:Cancel()
@@ -113,21 +103,26 @@ function RaidTrack.ScheduleSync()
     end)
 end
 
--- =============== Wysyłka delta → oficerzy/wybrani ===============
+-- ========= SYNC DELTA do uprawnionych =========
 function RaidTrack.SendSyncDeltaToEligible()
-    if not IsInGuild() then return end
+    if not IsInGuild() then
+        return
+    end
 
-    local me = UnitName("player")
-    local minRank  = tonumber(RaidTrackDB.settings.minSyncRank) or 1   -- 0=GM, 1=Officer
+    local me = Ambiguate(UnitName("player"), "none")
+    local minRank = tonumber(RaidTrackDB.settings.minSyncRank) or 1 -- 0=GM 1=Officer
     local myRank
     for i = 1, GetNumGuildMembers() do
         local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name and Ambiguate(name, "none") == me then myRank = rankIndex; break end
+        if name and Ambiguate(name, "none") == me then
+            myRank = rankIndex;
+            break
+        end
     end
-    -- tylko osoby z uprawnieniami (GM/officer) mogą inicjować pchanie delt
-    if not myRank or myRank > minRank then return end
+    if not myRank or myRank > minRank then
+        return
+    end
 
-    -- Bezpiecznik: nie zalewajmy – max N odbiorców w jednym przebiegu
     local MAX_PER_RUN = 3
     local sent = 0
 
@@ -135,35 +130,35 @@ function RaidTrack.SendSyncDeltaToEligible()
         local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
         name = name and Ambiguate(name, "none")
         if online and name and name ~= me and rankIndex <= minRank then
-            local knownEP   = (RaidTrackDB.syncStates and RaidTrackDB.syncStates[name]) or 0
-            local knownLoot = (RaidTrackDB.lootSyncStates and RaidTrackDB.lootSyncStates[name]) or 0
-
-            -- 🔴 KLUCZ: nie pchamy FULL do “dziewiczych” (0/0) – niech sami zrobią REQ_SYNC
+            local knownEP = RaidTrackDB.syncStates[name] or 0
+            local knownLoot = RaidTrackDB.lootSyncStates[name] or 0
+            -- nigdy nie pchamy FULL w ciemno
             if knownEP > 0 or knownLoot > 0 then
                 local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP) or {}
                 local lootDelta = {}
                 for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-                    if e.id and e.id > knownLoot then table.insert(lootDelta, e) end
+                    if e.id and e.id > knownLoot then
+                        table.insert(lootDelta, e)
+                    end
                 end
-
                 if #epgpDelta > 0 or #lootDelta > 0 then
                     RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
-                    sent = sent + 1
-                    if sent >= MAX_PER_RUN then break end
+                    sent = sent + 1;
+                    if sent >= MAX_PER_RUN then
+                        break
+                    end
                 end
             end
         end
     end
 end
 
-
--- =============== REQ do gildii ===============
+-- ========= REQ od nowego klienta =========
 function RaidTrack.RequestSyncFromGuild()
     if not IsInGuild() then
         return
     end
 
-    -- cooldown 15s, żeby nie spamować przy wielokrotnych wywołaniach
     RaidTrack._lastReqSyncAt = RaidTrack._lastReqSyncAt or 0
     local now = (GetTime and GetTime()) or time()
     if (now - RaidTrack._lastReqSyncAt) < 15 then
@@ -172,31 +167,27 @@ function RaidTrack.RequestSyncFromGuild()
     RaidTrack._lastReqSyncAt = now
 
     local me = Ambiguate(UnitName("player"), "none")
-    local epID = (RaidTrackDB.epgpLog and RaidTrackDB.epgpLog.lastId) or 0
-    local lootID = 0
+    local epID, lootID = (RaidTrackDB.epgpLog.lastId or 0), 0
     for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
         if e.id and e.id > lootID then
             lootID = e.id
         end
     end
 
-    -- wybierz JEDNEGO najlepszego kandydata (oficer)
+    -- wybierz najlepszego oficera
     local minRank = tonumber(RaidTrackDB.settings.minSyncRank) or 1
     if C_GuildInfo and C_GuildInfo.GuildRoster then
         C_GuildInfo.GuildRoster()
     end
 
-    local best, bestRank = nil, 99
+    local best, bestRank
     for i = 1, (GetNumGuildMembers() or 0) do
         local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
         name = name and Ambiguate(name, "none")
-        if online and name ~= me then
-            if rankIndex <= minRank and rankIndex < bestRank then
-                best, bestRank = name, rankIndex
-            end
+        if online and name ~= me and (not best or rankIndex < bestRank) and rankIndex <= minRank then
+            best, bestRank = name, rankIndex
         end
     end
-    -- fallback: pierwszy lepszy online, jeśli brak oficera
     if not best then
         for i = 1, (GetNumGuildMembers() or 0) do
             local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
@@ -211,25 +202,18 @@ function RaidTrack.RequestSyncFromGuild()
         return
     end
 
-    local msg = string.format("REQ_SYNC|%d|%d", epID, lootID)
-    _SendAddonMessage(SYNC_PREFIX, msg, "WHISPER", best, "NORMAL")
+    local msg = ("REQ_SYNC|%d|%d"):format(epID, lootID)
+    SEND(SYNC_PREFIX, msg, "WHISPER", best, "NORMAL")
 end
 
--- legacy stub
-function RaidTrack.SendSyncData()
-    if RaidTrack.HandleSendSync then
-        RaidTrack.HandleSendSync()
-    end
-end
-
--- =============== Wysyłka FULL/DELTA do konkretnego gracza ===============
+-- ========= Wysyłka FULL/DELTA (WHISPER) =========
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     if not RaidTrack.IsPlayerInMyGuild(name) then
         return
     end
 
-    RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
     RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
+    RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 
     local sendFull = (knownEP == 0 and knownLoot == 0)
     local payload, maxEP, maxLoot
@@ -256,19 +240,18 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
                 epgpWipeID = RaidTrackDB.epgpWipeID
             }
         }
-
         RaidTrack.pendingSends[name] = {
             meta = {
                 lastEP = maxEP,
                 lastLoot = maxLoot
             },
-            priority = "NORMAL", -- FULL jest duży -> NORMAL/BULK
+            priority = "NORMAL",
             isFull = true
         }
         RaidTrackDB.syncStates[UnitName("player")] = maxEP
         RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
     else
-        local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP)
+        local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP) or {}
         local lootDelta = {}
         for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
             if e.id and e.id > knownLoot then
@@ -299,15 +282,14 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         RaidTrackDB.lootSyncStates[UnitName("player")] = mxLoot
 
         RaidTrack.pendingSends[name] = RaidTrack.pendingSends[name] or {}
-        RaidTrack.pendingSends[name].priority = "ALERT" -- małe Δ -> ważne, idzie szybko
+        RaidTrack.pendingSends[name].priority = "ALERT"
         RaidTrack.pendingSends[name].isFull = false
     end
 
-    local str = RaidTrack.SafeSerialize(payload)
-    -- kompresja (znacząco redukuje liczbę chunków)
-    local wasCompressed
-    str, wasCompressed = RaidTrack.MaybeCompress(str)
-
+    local str = RaidTrack.SafeSerialize(payload);
+    if not str then
+        return
+    end
     local total = math.ceil(#str / CHUNK_SIZE)
     local chunks = {}
     for i = 1, total do
@@ -316,8 +298,8 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     RaidTrack.pendingSends[name] = RaidTrack.pendingSends[name] or {}
     RaidTrack.pendingSends[name].chunks = chunks
 
-    -- ping -> start
-    _SendAddonMessage(SYNC_PREFIX, "PING", "WHISPER", name, "NORMAL")
+    -- handshake
+    SEND(SYNC_PREFIX, "PING", "WHISPER", name, "NORMAL")
 
     if sendFull then
         C_Timer.NewTimer(15, function()
@@ -328,45 +310,34 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         end)
     end
 
-    -- ✅ CFG jako osobny, mały pakiet
+    -- drobny CFG osobno (mały payload)
     if RaidTrack.IsOfficer and RaidTrack.IsOfficer() then
-        local cfgPayload = {
+        local cfg = RaidTrack.SafeSerialize({
             settings = {
                 minSyncRank = RaidTrackDB.settings.minSyncRank,
                 officerOnly = RaidTrackDB.settings.officerOnly,
                 autoSync = RaidTrackDB.settings.autoSync,
                 minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex
             }
-        }
-        local cfgStr = RaidTrack.SafeSerialize(cfgPayload)
-        _SendAddonMessage(SYNC_PREFIX, "CFG|" .. cfgStr, "WHISPER", name, "NORMAL")
+        })
+        if cfg then
+            SEND(SYNC_PREFIX, "CFG|" .. cfg, "WHISPER", name, "NORMAL")
+        end
     end
 
     if RaidTrack.AddDebugMessage then
-        RaidTrack.AddDebugMessage(("[EGPPSync:prep] to=%s bytes=%d chunks=%d comp=%s prio=%s"):format(tostring(name),
-            #str, total, wasCompressed and "yes" or "no", (RaidTrack.pendingSends[name] and
-                RaidTrack.pendingSends[name].priority) or "?"))
+        RaidTrack.AddDebugMessage(("[EGPPSync:prep] to=%s bytes=%d chunks=%d prio=%s"):format(tostring(name), #str,
+            total, (RaidTrack.pendingSends[name] and RaidTrack.pendingSends[name].priority) or "?"))
     end
 end
 
--- =============== Batch wysyłki (używa CTL) ===============
 function RaidTrack.SendChunkBatch(name)
     local p = RaidTrack.pendingSends[name]
     if not p or not p.chunks then
         return
     end
 
-    if not p.chunks or #p.chunks == 0 then
-        if p.timer then
-            p.timer:Cancel()
-        end
-        RaidTrack.pendingSends[name] = nil
-        RaidTrack.lastSyncTime = time()
-        return
-    end
-
     local prio = p.priority or ((#p.chunks > 5) and "BULK" or "NORMAL")
-    -- FULL: jeśli bardzo dużo chunków, przełącz na BULK
     if p.isFull and #p.chunks > 20 then
         prio = "BULK"
     end
@@ -374,14 +345,11 @@ function RaidTrack.SendChunkBatch(name)
     local any = false
     for idx, c in ipairs(p.chunks) do
         if c then
-            any = true
-            _SendAddonMessage(SYNC_PREFIX, string.format("%d|%d|%s", idx, #p.chunks, c), "WHISPER", name, prio)
+            any = true;
+            SEND(SYNC_PREFIX, ("%d|%d|%s"):format(idx, #p.chunks, c), "WHISPER", name, prio)
         end
     end
     if not any then
-        if p.timer then
-            p.timer:Cancel()
-        end
         RaidTrack.pendingSends[name] = nil
         if p.meta and p.meta.lastEP and p.meta.lastLoot then
             RaidTrackDB.syncStates[UnitName("player")] = p.meta.lastEP
@@ -391,99 +359,35 @@ function RaidTrack.SendChunkBatch(name)
     end
 
     if RaidTrack.AddDebugMessage then
-        RaidTrack.AddDebugMessage(("[EGPPSync:send] to=%s chunks=%d prio=%s"):format(tostring(name), #p.chunks, prio))
+        RaidTrack.AddDebugMessage(("[EGPPSync:send] to=%s chunks=%d prio=%s"):format(tostring(name), #(p.chunks or {}),
+            prio))
     end
 end
 
--- =============== Broadcast CFG ===============
+-- ========= CFG broadcast (GUILD) =========
 function RaidTrack.BroadcastSettings(opts)
     opts = opts or {}
-    if not RaidTrack.IsOfficer or not RaidTrack.IsOfficer() then
+    if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
         return
     end
-
     local payload = {
         settings = {
             minSyncRank = RaidTrackDB.settings.minSyncRank,
             officerOnly = RaidTrackDB.settings.officerOnly,
             autoSync = RaidTrackDB.settings.autoSync,
             minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex,
-            epgpWipeID = RaidTrackDB.epgpWipeID, -- źródło prawdy (nie tworzymy z powietrza)
+            epgpWipeID = RaidTrackDB.epgpWipeID,
             wipe = opts.wipe == true
         }
     }
-
-    local msg = RaidTrack.SafeSerialize(payload)
-    _SendAddonMessage(SYNC_PREFIX, "CFG|" .. msg, "GUILD", nil, "ALERT")
-end
-
-function RaidTrack.StartGuildWipe()
-    if not RaidTrack.IsOfficer or not RaidTrack.IsOfficer() then
-        print("|cffff5555RaidTrack:|r Only officers can wipe EPGP.")
+    local s = RaidTrack.SafeSerialize(payload);
+    if not s then
         return
     end
-
-    -- wygeneruj NOWY gildiowy wipeID
-    local newID = RaidTrack._GenerateGuildWipeID and RaidTrack._GenerateGuildWipeID() or
-                      (tostring(time()) .. tostring(math.random(10000, 99999)))
-    RaidTrackDB.epgpWipeID = newID
-
-    -- 1) ogłoś CFG z wipe=true
-    RaidTrack.BroadcastSettings({
-        wipe = true
-    })
-
-    -- 2) zainicjuj pełny obieg (bazuje na istniejących ścieżkach)
-    C_Timer.After(0.2, function()
-        if RaidTrack.RequestSyncFromGuild then
-            RaidTrack.RequestSyncFromGuild()
-        end
-    end)
-
-    print("|cff00ff88RaidTrack:|r Guild wipe announced. Full sync will follow.")
+    SEND(SYNC_PREFIX, "CFG|" .. s, "GUILD", nil, "ALERT")
 end
 
--- =============== CFG apply (odbiór) ===============
-local function ApplyIncomingCfg(data, sender)
-    if type(data) ~= "table" or type(data.settings) ~= "table" then
-        return
-    end
-    RaidTrack._cfgSeen = true
-    RaidTrack._lastCfgFrom = Ambiguate(sender or "", "none")
-
-    local s = data.settings
-    if type(s.minSyncRank) == "number" then
-        RaidTrackDB.settings.minSyncRank = s.minSyncRank
-    end
-    if type(s.officerOnly) ~= "nil" then
-        RaidTrackDB.settings.officerOnly = s.officerOnly
-    end
-    if type(s.autoSync) ~= "nil" then
-        RaidTrackDB.settings.autoSync = s.autoSync
-    end
-    if type(s.minUITabRankIndex) == "number" then
-        RaidTrackDB.settings.minUITabRankIndex = s.minUITabRankIndex
-    end
-
-    -- stabilizacja wipeID
-    if type(s.epgpWipeID) == "string" and s.epgpWipeID ~= "" then
-        RaidTrackDB.epgpWipeID = s.epgpWipeID
-    end
-
-    if s.wipe == true then
-        RaidTrack._pendingWipe = true
-        RaidTrack.AddDebugMessage("CFG: wipe requested; waiting for FULL with non-empty EPGP")
-    end
-
-    if RaidTrack.ApplyUITabVisibility then
-        pcall(RaidTrack.ApplyUITabVisibility)
-    end
-    if RaidTrack.RefreshMinimapMenu then
-        pcall(RaidTrack.RefreshMinimapMenu)
-    end
-end
-
--- helpery
+-- ========= CFG apply / FULL apply =========
 local function _hasNonEmptyEPGP(tbl)
     if type(tbl) ~= "table" then
         return false
@@ -494,35 +398,31 @@ local function _hasNonEmptyEPGP(tbl)
     return false
 end
 
-local function _applyFullSnapshot(full, from)
+local function applyFull(full, from)
     if type(full) ~= "table" then
         return false
     end
-
     local incWipe = tostring(full.epgpWipeID or RaidTrackDB.epgpWipeID or "")
-    local incLastEP = 0
+    local incLastEP, incMaxLoot = 0, 0
     for _, e in ipairs(full.epgpLog or {}) do
         if e.id and e.id > incLastEP then
             incLastEP = e.id
         end
     end
-    local incMaxLoot = 0
     for _, e in ipairs(full.loot or {}) do
         if e.id and e.id > incMaxLoot then
             incMaxLoot = e.id
         end
     end
     local sig = incWipe .. "|" .. incLastEP .. "|" .. incMaxLoot
-
     if not RaidTrack._pendingWipe and RaidTrack._lastAppliedFullSig == sig then
         return false
     end
 
     if RaidTrack._pendingWipe then
         if not _hasNonEmptyEPGP(full.epgp) then
-            RaidTrack.AddDebugMessage("FULL refused: pending wipe but EPGP is empty; requesting resend.")
-            if C_ChatInfo and from then
-                _SendAddonMessage(SYNC_PREFIX, "REQ_SYNC|0|0", "WHISPER", from, "NORMAL")
+            if from then
+                SEND(SYNC_PREFIX, "REQ_SYNC|0|0", "WHISPER", from, "NORMAL")
             end
             return false
         end
@@ -535,14 +435,11 @@ local function _applyFullSnapshot(full, from)
             changes = {},
             lastId = 0
         }
-        RaidTrackDB.syncStates = {}
-        RaidTrackDB.lootSyncStates = {}
+        RaidTrackDB.syncStates, RaidTrackDB.lootSyncStates = {}, {}
         if type(full.epgpWipeID) == "string" and full.epgpWipeID ~= "" then
             RaidTrackDB.epgpWipeID = full.epgpWipeID
         end
-        RaidTrack._pendingWipe = false
-        RaidTrack._lastAppliedFullSig = sig
-        RaidTrack.AddDebugMessage("FULL applied with wipe.")
+        RaidTrack._pendingWipe, RaidTrack._lastAppliedFullSig = false, sig
         return true
     else
         if type(full.epgp) == "table" and _hasNonEmptyEPGP(full.epgp) then
@@ -566,39 +463,61 @@ local function _applyFullSnapshot(full, from)
             RaidTrackDB.epgpWipeID = full.epgpWipeID
         end
         RaidTrack._lastAppliedFullSig = sig
-        RaidTrack.AddDebugMessage("FULL applied (no wipe).")
         return true
     end
 end
 
--- (opcjonalnie) slash:
-SLASH_RTWIPEEPGP1 = "/rtwipeepgp"
-SlashCmdList["RTWIPEEPGP"] = function()
-    RaidTrack.StartGuildWipe()
+local function applyCfg(data, sender)
+    if type(data) ~= "table" or type(data.settings) ~= "table" then
+        return
+    end
+    RaidTrack._cfgSeen = true
+    RaidTrack._lastCfgFrom = Ambiguate(sender or "", "none")
+    local s = data.settings
+    if type(s.minSyncRank) == "number" then
+        RaidTrackDB.settings.minSyncRank = s.minSyncRank
+    end
+    if type(s.officerOnly) ~= "nil" then
+        RaidTrackDB.settings.officerOnly = s.officerOnly
+    end
+    if type(s.autoSync) ~= "nil" then
+        RaidTrackDB.settings.autoSync = s.autoSync
+    end
+    if type(s.minUITabRankIndex) == "number" then
+        RaidTrackDB.settings.minUITabRankIndex = s.minUITabRankIndex
+    end
+    if type(s.epgpWipeID) == "string" and s.epgpWipeID ~= "" then
+        RaidTrackDB.epgpWipeID = s.epgpWipeID
+    end
+    if s.wipe == true then
+        RaidTrack._pendingWipe = true
+    end
+    if RaidTrack.ApplyUITabVisibility then
+        pcall(RaidTrack.ApplyUITabVisibility)
+    end
+    if RaidTrack.RefreshMinimapMenu then
+        pcall(RaidTrack.RefreshMinimapMenu)
+    end
 end
 
--- =============== GŁÓWNY ODBIORNIK SYNC (EGPG/LOOT) ===============
+-- ========= GŁÓWNY ODBIORNIK SYNC_PREFIX =========
 local mf = CreateFrame("Frame")
 mf:RegisterEvent("CHAT_MSG_ADDON")
 mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
-    -- aukcje (zostaw jak było)
-    if prefix == "auction" and sender ~= UnitName("player") then
+    if prefix == AU_PREFIX and sender ~= UnitName("player") then
         if msg:sub(1, 8) == "RTCHUNK^" then
             RaidTrack.HandleChunkedAuctionPiece(sender, msg)
         end
         return
     end
-
-    -- tylko nasz sync EPGP/loot
     if prefix ~= SYNC_PREFIX or sender == UnitName("player") then
         return
     end
     local who = Ambiguate(sender or "", "none")
 
-    -- legacy aukcji – bez zmian
+    -- Legacy aukcji (stary klient)
     if msg:sub(1, 13) == "AUCTION_ITEM|" then
-        local payload = msg:sub(14)
-        local ok, data = RaidTrack.SafeDeserialize(payload)
+        local ok, data = RaidTrack.SafeDeserialize(msg:sub(14))
         if ok and data and data.auctionID and data.item then
             RaidTrack.partialAuction = RaidTrack.partialAuction or {}
             RaidTrack.partialAuction[data.auctionID] = RaidTrack.partialAuction[data.auctionID] or {
@@ -612,69 +531,63 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
                 gp = data.item.gp,
                 responses = {}
             })
-        else
-            RaidTrack.AddDebugMessage("Failed to deserialize AUCTION_ITEM")
         end
         return
     elseif msg:sub(1, 14) == "AUCTION_START|" then
-        local payload = msg:sub(15)
-        local ok, data = RaidTrack.SafeDeserialize(payload)
+        local ok, data = RaidTrack.SafeDeserialize(msg:sub(15))
         if ok and data and data.auctionID then
             C_Timer.After(0.3, function()
-                local auctionItems = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[data.auctionID] or
-                                         {}
-                data.items = auctionItems
+                local items = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[data.auctionID] or {}
+                data.items = items
                 RaidTrack.ReceiveAuctionHeader(data)
                 RaidTrack.pendingAuctionItems[data.auctionID] = nil
             end)
-        else
-            RaidTrack.AddDebugMessage("RaidTrack: Received invalid auction data from leader.")
         end
         return
     end
 
-    -- PING/PONG/REQ_SYNC/ACK/CFG
+    -- handshake
     if msg == "PING" then
-        _SendAddonMessage(SYNC_PREFIX, "PONG", "WHISPER", who, "NORMAL")
+        SEND(SYNC_PREFIX, "PONG", "WHISPER", who, "NORMAL");
         return
-    elseif msg == "PONG" and RaidTrack.pendingSends[who] then
-        RaidTrack.pendingSends[who].gotPong = true
-        RaidTrack.SendChunkBatch(who)
+    end
+    if msg == "PONG" and RaidTrack.pendingSends[who] then
+        RaidTrack.pendingSends[who].gotPong = true;
+        RaidTrack.SendChunkBatch(who);
         return
-    elseif msg == "PONG" then
-        RaidTrack.lastSyncTime = time()
+    end
+    if msg == "PONG" then
+        RaidTrack.lastSyncTime = time();
         return
-    elseif msg:sub(1, 9) == "REQ_SYNC|" then
+    end
+
+    if msg:sub(1, 9) == "REQ_SYNC|" then
         local _, epStr, lootStr = strsplit("|", msg)
-        local knownEP = tonumber(epStr) or 0
-        local knownLoot = tonumber(lootStr) or 0
-        RaidTrack.SendSyncDataTo(who, knownEP, knownLoot)
+        RaidTrack.SendSyncDataTo(who, tonumber(epStr) or 0, tonumber(lootStr) or 0)
         return
-    elseif msg:sub(1, 4) == "ACK|" then
+    end
+    if msg:sub(1, 4) == "ACK|" then
         local idx = tonumber(msg:sub(5))
         local p = RaidTrack.pendingSends[who]
         if p and p.chunks[idx] then
             p.chunks[idx] = nil
         end
         return
-    elseif msg:sub(1, 4) == "CFG|" then
-        local cfgStr = msg:sub(5)
-        local ok, data = RaidTrack.SafeDeserialize(cfgStr)
+    end
+    if msg:sub(1, 4) == "CFG|" then
+        local ok, data = RaidTrack.SafeDeserialize(msg:sub(5))
         if ok and data then
-            ApplyIncomingCfg(data, who)
-        else
-            RaidTrack.AddDebugMessage("CFG: invalid or failed to deserialize")
+            applyCfg(data, who)
         end
         return
     end
 
-    -- Chunkowany FULL/DELTA: "<i>|<total>|<data>"
-    local i, t, d = msg:match("^(%d+)|(%d+)|(.+)$")
+    -- chunk: i|total|data
+    local i, t, d = msg:match("^(%d+)|(%d+)|(.+)$");
     i, t = tonumber(i), tonumber(t)
     if not (i and t and d) then
         return
     end
-
     local buf = RaidTrack.chunkBuffer[who] or {
         chunks = {},
         total = t,
@@ -682,47 +595,39 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     }
     RaidTrack.chunkBuffer[who] = buf
     if not buf.chunks[i] then
-        buf.chunks[i] = d
+        buf.chunks[i] = d;
         buf.received = buf.received + 1
     end
     if buf.received ~= buf.total then
         return
     end
 
-    local full = table.concat(buf.chunks)
+    local full = table.concat(buf.chunks);
     RaidTrack.chunkBuffer[who] = nil
-
-    -- dekompresja jeśli trzeba
-    full = RaidTrack.MaybeDecompress(full)
-
-    local ok, data = RaidTrack.SafeDeserialize(full)
+    local ok, data = RaidTrack.SafeDeserialize(full);
     if not ok or not data then
         return
     end
 
-    -- ===== FULL =====
     if data.full then
-        local applied = _applyFullSnapshot(data.full, who)
+        local applied = applyFull(data.full, who)
         if applied then
-            local lastEP = 0
-            local ch = (data.full.epgpLog or {})
-            for _, e in ipairs(ch) do
+            local lastEP = 0;
+            for _, e in ipairs(data.full.epgpLog or {}) do
                 if e.id and e.id > lastEP then
                     lastEP = e.id
                 end
             end
-            local maxLoot = 0
+            local maxLoot = 0;
             for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
                 if e.id and e.id > maxLoot then
                     maxLoot = e.id
                 end
             end
-
             RaidTrackDB.syncStates[who] = lastEP
             RaidTrackDB.syncStates[UnitName("player")] = lastEP
             RaidTrackDB.lootSyncStates[who] = maxLoot
             RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
-
             RaidTrack.lastSyncTime = time()
             if RaidTrack.UpdateEPGPList then
                 RaidTrack.UpdateEPGPList()
@@ -734,13 +639,13 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         return
     end
 
-    -- ===== DELTA =====
     if RaidTrack._pendingWipe then
-        RaidTrack.AddDebugMessage("Delta ignored: pending wipe; waiting for FULL")
         return
     end
-
+    -- DELTA
     RaidTrack.MergeEPGPChanges(data.epgpDelta or {})
+
+    -- EP last-id
     local newLastEP = 0
     for _, e in ipairs(data.epgpDelta or {}) do
         if e.id and e.id > newLastEP then
@@ -752,38 +657,47 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         RaidTrackDB.syncStates[UnitName("player")] = newLastEP
     end
 
+    -- Loot last-id
+    RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
+    RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
+
     local seen = {}
-    for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-        seen[e.id] = true
-    end
     local mx = RaidTrackDB.lootSyncStates[who] or 0
+
+    for _, e in ipairs(RaidTrackDB.lootHistory) do
+        if e.id then
+            seen[e.id] = true
+        end
+    end
+
     for _, e in ipairs(data.lootDelta or {}) do
         if e.id and not seen[e.id] then
             table.insert(RaidTrackDB.lootHistory, e)
-            seen[e.id] = true
             if e.id > mx then
                 mx = e.id
             end
         end
     end
+
     RaidTrackDB.lootSyncStates[who] = mx
+
     if RaidTrack.RefreshLootTab then
         RaidTrack.RefreshLootTab()
     end
     RaidTrack.lastSyncTime = time()
 end)
 
--- =============== Login init ===============
+-- ========= Login init =========
 local loginFrame = CreateFrame("Frame")
 loginFrame:RegisterEvent("PLAYER_LOGIN")
 loginFrame:SetScript("OnEvent", function(_, evt)
     if evt == "PLAYER_LOGIN" and RaidTrackDB.settings.autoSync ~= false then
-        C_Timer.After(5, function()
+        C_Timer.After(3, function()
             RaidTrack.RequestSyncFromGuild()
         end)
     end
     if RaidTrack.IsOfficer and RaidTrack.IsOfficer() then
-        C_Timer.After(10, function()
+        C_Timer.After(8, function()
             RaidTrack.BroadcastSettings()
         end)
     end
@@ -792,9 +706,8 @@ loginFrame:SetScript("OnEvent", function(_, evt)
     end
 end)
 
--- =============== RTCHUNK sender (używane m.in. przez RTsync/auction) ===============
--- Jeśli msgId==nil -> LEGACY: RTCHUNK^<idx>^<total>^<chunk>
--- Jeśli msgId  jest -> NOWY:   RTCHUNK^<msgId>^<idx>^<total>^<chunk>
+-- ========= RTCHUNK sender (używane przez RTsync i aukcje) =========
+
 function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel, target, priority)
     if type(prefix) ~= "string" or type(payload) ~= "string" or #payload == 0 then
         return
@@ -802,18 +715,12 @@ function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel, target, pri
     channel = channel or (IsInRaid() and "RAID" or "GUILD")
     priority = priority or "NORMAL"
 
-    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-        pcall(C_ChatInfo.RegisterAddonMessagePrefix, prefix)
-    end
-
     local MAX = 200
-    local total = math.ceil(#payload / MAX)
+    local total = math.ceil(#payload / MAX);
     if total < 1 then
         total = 1
     end
-
     local useNew = (type(msgId) == "string" and msgId ~= "")
-
     local function build(i)
         local s = (i - 1) * MAX + 1
         local part = payload:sub(s, s + MAX - 1)
@@ -823,279 +730,227 @@ function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel, target, pri
             return ("RTCHUNK^%d^%d^%s"):format(i, total, part)
         end
     end
-
-    -- podbij priorytet jeśli dużo chunków
-    local prio = priority
+    local prio = priority;
     if prio == "NORMAL" and total > 5 then
         prio = "BULK"
     end
-
     for i = 1, total do
-        _SendAddonMessage(prefix, build(i), channel, target, prio)
+        SEND(prefix, build(i), channel, target, prio)
     end
-
     if RaidTrack.AddDebugMessage then
         RaidTrack.AddDebugMessage(("[QueueChunkedSend] pref=%s ch=%s chunks=%d prio=%s"):format(prefix, channel, total,
             prio))
     end
 end
 
--- =============== Aukcje (chunk, bez zmian w logice) ===============
-function RaidTrack.QueueAuctionBroadcastSend(prefix, data)
+-- ========= Aukcje =========
+local function AU_Channel()
+    return IsInRaid() and "RAID" or (IsInGroup() and "PARTY" or (IsInGuild() and "GUILD" or nil))
+end
+
+function RaidTrack.QueueAuctionBroadcastSend(prefix, data, channel)
+    channel = "RAID" -- wymuszamy RAID
+    if not channel then
+        RaidTrack.AddDebugMessage("[Auction] No valid channel");
+        return
+    end
+    local maxSize = 200;
     local chunks = {}
-    local maxSize = 200
     for i = 1, #data, maxSize do
         table.insert(chunks, data:sub(i, i + maxSize - 1))
     end
+    local prio = (#chunks > 5) and "BULK" or "NORMAL"
     for i, chunk in ipairs(chunks) do
-        local marker = "RTCHUNK^" .. i .. "^" .. #chunks .. "^" .. chunk
-        _SendAddonMessage(prefix, marker, "RAID", nil, "NORMAL")
+        local marker = ("RTCHUNK^%d^%d^%s"):format(i, #chunks, chunk)
+        SEND(prefix, marker, channel, nil, prio)
+    end
+    if RaidTrack.AddDebugMessage then
+        RaidTrack.AddDebugMessage(("[Auction:send] pref=%s ch=%s chunks=%d"):format(prefix, channel, #chunks))
     end
 end
 
+-- ZAMIANA: tylko RAID, bez party/guild
+local function RT_AuctionChannel()
+    if IsInRaid() then return "RAID" end
+    return nil
+end
+
+
+-- Wyślij po JEDNYM itemie (new) + mirror legacy
+
 function RaidTrack.QueueAuctionChunkedSend(target, auctionID, messageType, input)
-    if type(input) ~= "table" then
-        error("QueueAuctionChunkedSend: input must be a table")
+    if type(input) ~= "table" then error("QueueAuctionChunkedSend: input must be a table") end
+
+    if not auctionID or auctionID == "" then
+        auctionID = RaidTrack.currentAuctionID or (tostring(time()) .. tostring(math.random(10000,99999)))
+        RaidTrack.currentAuctionID = auctionID
+        if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("[Auction] Generated auctionID="..tostring(auctionID)) end
     end
 
-    local payloadTable = input
-
-    for idx, item in ipairs(payloadTable) do
-        if item.itemID then
-            item.uniqueItemID = item.itemID .. "_" .. auctionID
-        else
-            RaidTrack.AddDebugMessage("Error: itemID is nil for item at index " .. tostring(idx))
-            return
-        end
-        if item.responses then
-            for player, response in pairs(item.responses) do
-                local ep, gp, pr = RaidTrack.GetEPGP(player)
-                response.ep, response.gp, response.pr = ep, gp, pr
-            end
-        end
+    local channel = RT_AuctionChannel()
+    if not channel then
+        if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("[Auction] Not in raid; aborting broadcast") end
+        return
     end
 
-    local fullPayload = {
-        auctionID = auctionID,
-        type = "auction",
-        payload = payloadTable,
-        subtype = messageType
-    }
+    -- helper do wysyłki jednego pakietu "auction"
+    local function sendAuctionPacket(subtype, payload)
+        local pkt = { auctionID = auctionID, type = "auction", subtype = subtype, payload = payload }
+        local s = RaidTrack.SafeSerialize(pkt)
+        RaidTrack.QueueAuctionBroadcastSend("auction", s, channel)
+    end
 
-    local serialized = RaidTrack.SafeSerialize(fullPayload)
-    RaidTrack.QueueAuctionBroadcastSend("auction", serialized)
+    if messageType == "item" then
+        -- weź tablicę itemów lub pojedynczy wpis i wyślij każdy osobno
+        local list = (input.itemID and {input}) or input
+        for _, it in ipairs(list) do
+            sendAuctionPacket("item", { itemID = it.itemID, gp = it.gp, link = it.link })
+        end
+        if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage(("[Auction:send] items=%d ch=%s"):format(#list, channel)) end
+
+    elseif messageType == "header" then
+        local now = time()
+        local dur  = tonumber(input.duration) or 0
+        local ends = tonumber(input.endsAt) or (now + dur)
+        sendAuctionPacket("header", {
+            auctionID = auctionID,
+            leader    = Ambiguate(UnitName("player"), "none"),
+            started   = now,
+            duration  = dur,
+            endsAt    = ends,
+        })
+        if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage(("[Auction:send] header ch=%s"):format(channel)) end
+
+    elseif messageType == "response" then
+        sendAuctionPacket("response", input)
+    end
+
+    -- LEGACY mirror (na tym samym kanale RAID – dla starych klientów)
+    if messageType == "item" then
+        for _, it in ipairs((input.itemID and {input}) or input) do
+            local legacyItem = { auctionID = auctionID, item = { itemID = it.itemID, link = it.link, gp = it.gp } }
+            local s = RaidTrack.SafeSerialize(legacyItem)
+            C_ChatInfo.SendAddonMessage("RaidTrackSync", "AUCTION_ITEM|" .. s, channel)
+        end
+    elseif messageType == "header" then
+        local now = time()
+        local dur  = tonumber(input.duration) or 0
+        local ends = tonumber(input.endsAt) or (now + dur)
+        local header = { auctionID = auctionID, leader = Ambiguate(UnitName("player"), "none"), started = now, duration = dur, endsAt = ends }
+        local s = RaidTrack.SafeSerialize(header)
+        C_ChatInfo.SendAddonMessage("RaidTrackSync", "AUCTION_START|" .. s, channel)
+    end
+end
+
+
+-- mały helper do porównań nazw
+local function _isMe(name)
+    return Ambiguate(name or "", "none") == Ambiguate(UnitName("player"), "none")
 end
 
 function RaidTrack.ReceiveAuctionChunked(sender, rawData)
-    if rawData:sub(1, 8) == "RTCHUNK^" then
-        return
-    end
+    if type(rawData) ~= "string" then return end
+    if rawData:sub(1,8) == "RTCHUNK^" then return end
 
     local ok, data = RaidTrack.SafeDeserialize(rawData)
-    if not ok then
-        return
-    end
-    if data.type ~= "auction" then
-        return
-    end
+    if not ok or not data or data.type ~= "auction" then return end
 
     RaidTrack.pendingAuctionItems = RaidTrack.pendingAuctionItems or {}
     RaidTrack.pendingAuctionItems[data.auctionID] = RaidTrack.pendingAuctionItems[data.auctionID] or {}
 
     if data.subtype == "item" then
-        local itemData = data.payload
-        if itemData and itemData.itemID then
-            local itemExists = false
-            for _, item in ipairs(RaidTrack.pendingAuctionItems[data.auctionID]) do
-                if item.itemID == itemData.itemID then
-                    itemExists = true;
-                    break
+        local list = data.payload
+        -- pozwól na array albo pojedynczy obiekt
+        if list and not list.itemID and type(list) == "table" then
+            for _, it in ipairs(list) do
+                if it and it.itemID then
+                    table.insert(RaidTrack.pendingAuctionItems[data.auctionID], {
+                        itemID = it.itemID,
+                        uniqueItemID = tostring(it.itemID) .. "_" .. data.auctionID,
+                        gp = it.gp, link = it.link, responses = {}
+                    })
                 end
             end
-            if not itemExists then
-                local uniqueItemID = tostring(itemData.itemID) .. "_" .. data.auctionID
-                table.insert(RaidTrack.pendingAuctionItems[data.auctionID], {
-                    itemID = itemData.itemID,
-                    uniqueItemID = uniqueItemID,
-                    gp = itemData.gp,
-                    responses = {}
+            return
+        end
+
+        if list and list.itemID then
+            local items = RaidTrack.pendingAuctionItems[data.auctionID]
+            local exists = false
+            for _, it in ipairs(items) do
+                if tonumber(it.itemID) == tonumber(list.itemID) then exists = true; break end
+            end
+            if not exists then
+                table.insert(items, {
+                    itemID = list.itemID,
+                    uniqueItemID = tostring(list.itemID) .. "_" .. data.auctionID,
+                    gp = list.gp, link = list.link, responses = {}
                 })
-            else
-                RaidTrack.AddDebugMessage("Item with itemID=" .. tostring(itemData.itemID) ..
-                                              " already exists, skipping.")
             end
         else
-            RaidTrack.AddDebugMessage("Invalid auction item data!")
+            if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("Invalid auction item data!") end
         end
 
     elseif data.subtype == "header" then
-        local headerData = data.payload
-        if headerData then
-            local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
-
-            if UnitIsUnit(headerData.leader, "player") then
-                RaidTrack:OpenAuctionLeaderUI()
-            end
-
-            if IsInRaid() and IsInGuild() then
-                RaidTrack.OpenAuctionParticipantUI({
-                    auctionID = data.auctionID,
-                    leader = headerData.leader,
-                    started = headerData.started,
-                    endsAt = headerData.endsAt,
-                    duration = headerData.duration,
-                    items = items
-                })
-            else
-                RaidTrack.AddDebugMessage("Blocked auction popup (not in raid or not in guild)")
-            end
-
-            RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
-            RaidTrack.activeAuctions[data.auctionID] = {
-                items = items,
-                leader = headerData.leader,
-                started = headerData.started,
-                endsAt = headerData.endsAt,
-                duration = headerData.duration
-            }
-
-            RaidTrack.pendingAuctionItems[data.auctionID] = nil
-        else
-            RaidTrack.AddDebugMessage("Invalid auction header data!")
+        local h = data.payload
+        if not h or not h.leader then
+            if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("Invalid auction header data!") end
+            return
         end
+
+        local items = RaidTrack.pendingAuctionItems[data.auctionID] or {}
+
+        if _isMe(h.leader) and RaidTrack.OpenAuctionLeaderUI then
+            RaidTrack:OpenAuctionLeaderUI()
+        end
+
+        if IsInRaid() and RaidTrack.OpenAuctionParticipantUI then
+            RaidTrack.OpenAuctionParticipantUI({
+                auctionID = data.auctionID,
+                leader    = h.leader,
+                started   = h.started,
+                endsAt    = h.endsAt,
+                duration  = h.duration,
+                items     = items,
+            })
+        end
+
+        RaidTrack.activeAuctions = RaidTrack.activeAuctions or {}
+        RaidTrack.activeAuctions[data.auctionID] = {
+            items = items, leader = h.leader, started = h.started, endsAt = h.endsAt, duration = h.duration
+        }
+        RaidTrack.pendingAuctionItems[data.auctionID] = nil
 
     elseif data.subtype == "response" then
         if data.payload then
-            local auction = RaidTrack.activeAuctions[data.auctionID]
-            if auction and auction.leader and UnitIsUnit("player", auction.leader) then
+            local auc = RaidTrack.activeAuctions and RaidTrack.activeAuctions[data.auctionID]
+            if auc and _isMe(auc.leader) then
                 RaidTrack.HandleAuctionResponse(data.auctionID, data.payload)
-            else
-                RaidTrack.AddDebugMessage("Not the leader or auction missing, skipping.")
             end
-        else
-            RaidTrack.AddDebugMessage("Missing payload in auction response chunk!")
         end
     end
 end
 
-function RaidTrack.HandleAuctionResponse(auctionID, responseData)
-    if type(auctionID) ~= "string" and type(auctionID) ~= "number" then
-        RaidTrack.AddDebugMessage("ERROR: Invalid auctionID in responseData (type=" .. type(auctionID) .. ")")
-        return
-    end
-    if not responseData or not responseData.itemID or not responseData.from or not responseData.choice then
-        RaidTrack.AddDebugMessage("ERROR: Incomplete responseData")
-        return
-    end
 
-    auctionID = tostring(auctionID)
-
-    local auctionData = RaidTrack.activeAuctions and RaidTrack.activeAuctions[auctionID]
-    local auctionItems = auctionData and auctionData.items
-    if not auctionItems then
-        RaidTrack.AddDebugMessage("ERROR: No auction items found for auctionID " .. auctionID)
-        return
-    end
-
-    local matched = false
-    for _, item in ipairs(auctionItems) do
-        local itemID = tonumber(item.itemID)
-        local responseItemID = tonumber(responseData.itemID)
-        if itemID == responseItemID then
-            matched = true
-            item.bids = item.bids or {}
-
-            local responseExists = false
-            for _, bid in ipairs(item.bids) do
-                if bid.from == responseData.from then
-                    bid.choice = responseData.choice
-                    responseExists = true
-                    break
-                end
-            end
-
-            if not responseExists and responseData.choice ~= "PASS" then
-                table.insert(item.bids, responseData)
-            end
-
-            if responseData.from == auctionData.leader then
-                RaidTrack.UpdateLeaderAuctionUI(auctionID, item)
-            end
-            RaidTrack.UpdateLeaderAuctionUI(auctionID)
-            RaidTrack.DebugPrintResponses(item)
-            break
-        else
-            RaidTrack.AddDebugMessage("ItemID " .. tostring(itemID) .. " does not match response itemID " ..
-                                          tostring(responseItemID))
-        end
-    end
-
-    if matched then
-        if RaidTrack.RefreshAuctionLeaderTabs then
-            RaidTrack.RefreshAuctionLeaderTabs()
-        end
-    else
-        RaidTrack.AddDebugMessage("WARNING: No matching item found for response itemID " ..
-                                      tostring(responseData.itemID))
-    end
-end
-
--- =============== Odbiór chunków 'RTCHUNK^' (legacy) dla RTSYNC (jeśli ktoś używa) ===============
-function RaidTrack.HandleChunkedRaidPiece(sender, message)
-    if type(message) ~= "string" or message:sub(1, 8) ~= "RTCHUNK^" then
-        return
-    end
-
-    -- Legacy nagłówek: RTCHUNK^<idx>^<total>^<chunkData>
-    local idx, total, chunkData = message:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
-    if not idx or not total or not chunkData then
+-- Odbiór legacy chunków aukcji
+function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
+    local idx, total, chunk = msg:match("^RTCHUNK%^(%d+)%^(%d+)%^(.+)$")
+    if not idx or not total or not chunk then
         return
     end
     idx, total = tonumber(idx), tonumber(total)
 
-    sender = (sender and sender ~= "") and sender or "UNKNOWN"
-    RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
-    local key = sender .. "_RTSYNC"
-    if idx == 1 or type(RaidTrack._chunkBuffers[key]) ~= "table" then
-        RaidTrack._chunkBuffers[key] = {}
-    end
-    local buf = RaidTrack._chunkBuffers[key]
-    buf[idx] = chunkData
-
+    RaidTrack._auctionChunks = RaidTrack._auctionChunks or {}
+    local list = RaidTrack._auctionChunks[sender] or {};
+    RaidTrack._auctionChunks[sender] = list
+    list[idx] = chunk
     for i = 1, total do
-        if not buf[i] then
+        if not list[i] then
             return
         end
     end
 
-    local full = table.concat(buf, "")
-    RaidTrack._chunkBuffers[key] = nil
-
-    -- dekompresja jeśli trzeba
-    full = RaidTrack.MaybeDecompress(full)
-
-    if RaidTrack.MaybeDecompress then
-        local dec, was = RaidTrack.MaybeDecompress(full)
-        if was then
-            full = dec
-        end
-    end
-    local ok, data = RaidTrack.SafeDeserialize(full)
-
-    if not ok or not data then
-        if RaidTrack.AddDebugMessage then
-            RaidTrack.AddDebugMessage("❌ Failed to deserialize RaidSync from " .. tostring(sender))
-        end
-        return
-    end
-
-    if data.activeID and not IsInRaid() then
-        data.activeID, data.activePreset, data.activeConfig = nil, nil, nil
-    end
-
-    if RaidTrack.ApplyRaidSyncData then
-        RaidTrack.ApplyRaidSyncData(data, sender)
-    elseif RaidTrack.MergeRaidSyncData then
-        RaidTrack.MergeRaidSyncData(data, sender)
-    end
+    local full = table.concat(list, "");
+    RaidTrack._auctionChunks[sender] = nil
+    RaidTrack.ReceiveAuctionChunked(sender, full)
 end

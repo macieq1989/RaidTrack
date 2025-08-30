@@ -846,3 +846,73 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
 
     RaidTrack.AddDebugMessage(("Global wipe announced. WipeID=%s reason=%s; baseline sent to online guild."):format(newID, reason))
 end
+
+-- Uniwersalne odczytanie payloadu:
+-- 1) surowy AceSerializer (^1^...), 2) LibDeflate (z markerem \001 i bez),
+-- 3) LibCompress (AddonEncodeTable + Decompress), 4) jeszcze raz spróbuj sam Decompress.
+function RaidTrack.DeserializeAny(raw)
+    if type(raw) ~= "string" or raw == "" then
+        return false, nil, "not-a-string"
+    end
+
+    local s = raw
+
+    -- 0) już jest AceSerializer?
+    if s:sub(1,3) == "^1^" then
+        return RaidTrack.SafeDeserialize(s)
+    end
+
+    local LD = (LibStub and LibStub("LibDeflate", true)) or _G.LibDeflate
+    local LC = (LibStub and LibStub("LibCompress", true)) or _G.LibCompress
+
+    -- 1) LibDeflate z markerem \001
+    if LD and s:sub(1,1) == "\001" then
+        local dec = LD:DecodeForWoWAddonChannel(s:sub(2))
+        if dec then
+            local out = LD:DecompressDeflate(dec)
+            if out then s = out end
+        end
+    -- 2) LibDeflate bez markera (ktoś wysłał EncodeForWoWAddonChannel bez prefiksu)
+    elseif LD then
+        local dec = LD:DecodeForWoWAddonChannel(s)
+        if dec then
+            local out = LD:DecompressDeflate(dec)
+            if out then s = out end
+        end
+    end
+
+    -- jeśli po LD już mamy Ace, spróbuj zdeserializować
+    if s:sub(1,3) == "^1^" then
+        return RaidTrack.SafeDeserialize(s)
+    end
+
+    -- 3) LibCompress: AddonEncodeTable + Decompress (często daje nagłówki w stylu "Z:...")
+    if LC and LC.GetAddonEncodeTable then
+        local AET = LC:GetAddonEncodeTable()
+        if AET and AET.Decode then
+            local decoded = AET:Decode(s)
+            if decoded then
+                local un, err = LC:Decompress(decoded)
+                if un then s = un end
+            end
+        end
+    end
+
+    -- 4) ostatni strzał: może ktoś wysłał skompresowany binarnie bez kodowania kanałowego
+    if s:sub(1,3) ~= "^1^" and LC and LC.Decompress then
+        local un, err = LC:Decompress(s)
+        if un then s = un end
+    end
+
+    -- 5) finalnie oczekujemy AceSerializer
+    if s:sub(1,3) ~= "^1^" then
+        if RaidTrack.AddDebugMessage then
+            local head = s:gsub("[^%g%s]", function(c) return ("\\x%02X"):format(c:byte()) end):sub(1,16)
+            RaidTrack.AddDebugMessage("[DeSer] bad header after LD/LC fallbacks: " .. head)
+        end
+        return false, nil, "bad-header"
+    end
+
+    return RaidTrack.SafeDeserialize(s)
+end
+
