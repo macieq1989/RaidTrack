@@ -3,7 +3,7 @@ local addonName, RaidTrack = ...
 RaidTrack = RaidTrack or {}
 
 local SYNC_PREFIX = "RTSYNC"
-local CHUNK_SIZE = 200
+local CHUNK_SIZE  = 200
 C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
 
 RaidTrack.lastRaidSyncID = nil
@@ -164,22 +164,18 @@ function RaidTrack.SendRaidSyncData(opts)
     local serialized = RaidTrack.SafeSerialize(payload)
     if not serialized then return end
 
-   -- Kanały wyjściowe
-local hasDeletes = (removedPresets ~= nil) or (removedInstances ~= nil)
-local wantRaid  = activeID and (opts.allowRaid ~= false)
--- zawsze GUILD gdy:
---  - nie ma aktywnego raidu (standard),
---  - są kasowania,
---  - LUB ktoś jawnie wymusi (np. zapis/usu­nięcie presetu)
-local wantGuild = inGuild and (opts.alwaysGuild or not activeID or hasDeletes)
+    -- Kanały wyjściowe
+    local hasDeletes = (removedPresets ~= nil) or (removedInstances ~= nil)
+    local wantRaid  = activeID and (opts.allowRaid ~= false)
+    -- zawsze GUILD gdy: brak aktywnego raidu, są kasowania, albo wymuszone
+    local wantGuild = inGuild and (opts.alwaysGuild or not activeID or hasDeletes)
 
-if wantRaid then
-    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "RAID")
-end
-if wantGuild then
-    RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "GUILD")
-end
-
+    if wantRaid then
+        RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "RAID")
+    end
+    if wantGuild then
+        RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "GUILD")
+    end
 end
 
 -- Szybki publiczny helper do broadcastu (np. po end raidu)
@@ -206,6 +202,9 @@ end
 function RaidTrack.ApplyRaidSyncData(data, sender)
     if type(data) ~= "table" then return end
 
+    -- oczyść przeterminowane tombstony, zanim zaczniemy
+    if _pruneTombstones then _pruneTombstones() end
+
     -- === helpers ===
     local function upsertPresetsWithRevisions(dst, src, inRevs)
         if type(dst) ~= "table" or type(src) ~= "table" then return false end
@@ -223,8 +222,8 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
                     shouldApply = incomingRev > localRev
                 elseif incomingRev and not localRev then
                     shouldApply = true
-                -- jeśli brak rewizji po obu stronach, przyjmij z sieci (żeby wyrównać)
                 elseif not incomingRev and not localRev then
+                    -- brak rewizji po obu stronach → przyjmij z sieci, żeby wyrównać
                     shouldApply = true
                 end
 
@@ -339,6 +338,20 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
     local removedPres    = (type(data.removedPresets)   == "table") and data.removedPresets   or {}
     local removedInst    = (type(data.removedInstances) == "table") and data.removedInstances or {}
 
+    -- zapisz lokalnie tombstony z sieci (chroni przed „boomerangiem”)
+    local nowTs = time()
+    for _, nm in ipairs(removedPres) do
+        if nm and nm ~= "" then
+            RaidTrackDB._presetTombstones[nm] = RaidTrackDB._presetTombstones[nm] or nowTs
+        end
+    end
+    for _, iid in ipairs(removedInst) do
+        local key = tostring(iid)
+        if key ~= "" then
+            RaidTrackDB._instanceTombstones[key] = RaidTrackDB._instanceTombstones[key] or nowTs
+        end
+    end
+
     -- 🔒 Odrzuć wszystko, co lokalnie jest skasowane (świeży tombstone)
     for name in pairs(srcPresets) do
         if _isTombstonedPreset(name) then
@@ -361,20 +374,20 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
         return
     end
 
-    -- === merge + kasowania ===
+    -- === merge (najpierw) + kasowania (po merge → deletion wins) ===
     local changed = false
 
-    -- kasowania najpierw (żeby później nie „odrodzić” przez upsert)
+    -- upsert wg rewizji / sticky-ended
+    changed = upsertPresetsWithRevisions(RaidTrackDB.raidPresets, srcPresets, srcRevisions) or changed
+    changed = upsertInstances(RaidTrackDB.raidInstances, srcInstances)                       or changed
+
+    -- jawne kasowania po mer­gu
     if #removedPres > 0 then
         changed = removePresets(RaidTrackDB.raidPresets, removedPres) or changed
     end
     if #removedInst > 0 then
         changed = removeInstances(RaidTrackDB.raidInstances, removedInst) or changed
     end
-
-    -- upsert wg rewizji / sticky-ended
-    changed = upsertPresetsWithRevisions(RaidTrackDB.raidPresets, srcPresets, srcRevisions) or changed
-    changed = upsertInstances(RaidTrackDB.raidInstances, srcInstances)                       or changed
 
     -- === aktywny raid tylko dla osób w raidzie i gdy instancja nie jest zakończona ===
     if data.activeID and not IsInRaid() then
