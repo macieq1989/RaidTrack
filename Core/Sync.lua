@@ -17,6 +17,11 @@ RaidTrack.syncTimer = nil
 
 RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
 
+-- ===== Wipe / CFG state =====
+RaidTrack._cfgSeen = RaidTrack._cfgSeen or false -- mamy już jakieś CFG od oficera
+RaidTrack._pendingWipe = RaidTrack._pendingWipe or false -- czekamy na FULL z nie-pustym EPGP
+RaidTrack._lastCfgFrom = RaidTrack._lastCfgFrom or nil -- kto ostatnio wysłał CFG
+
 if not C_ChatInfo.IsAddonMessagePrefixRegistered("auction") then
     C_ChatInfo.RegisterAddonMessagePrefix("auction")
 end
@@ -25,8 +30,6 @@ function RaidTrack.RegisterChunkHandler(prefix, handler)
     RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
     RaidTrack.chunkHandlers[prefix] = handler
 end
-
-
 
 local genericCommFrame = CreateFrame("Frame")
 genericCommFrame:RegisterEvent("CHAT_MSG_ADDON")
@@ -273,91 +276,207 @@ function RaidTrack.SendChunkBatch(name)
     end
 end
 
-function RaidTrack.BroadcastSettings()
-    if not RaidTrack.IsOfficer() then
+function RaidTrack.BroadcastSettings(opts)
+    opts = opts or {}
+    if not RaidTrack.IsOfficer or not RaidTrack.IsOfficer() then
         return
     end
 
-    -- 🔹 natychmiastowe odświeżenie u siebie
-    if RaidTrack.ApplyUITabVisibility then
-        RaidTrack.ApplyUITabVisibility()
-    end
-    if RaidTrack.RefreshMinimapMenu then
-        RaidTrack.RefreshMinimapMenu()
-    end
-
-    -- 🔹 wysyłka do gildii
     local payload = {
         settings = {
             minSyncRank = RaidTrackDB.settings.minSyncRank,
             officerOnly = RaidTrackDB.settings.officerOnly,
             autoSync = RaidTrackDB.settings.autoSync,
             minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex,
-            epgpWipeID = RaidTrackDB.epgpWipeID
+            epgpWipeID = RaidTrackDB.epgpWipeID, -- JUŻ NIE generujemy „z powietrza”
+            wipe = opts.wipe == true -- jawny sygnał wipe (domyślnie false)
         }
     }
+
     local msg = RaidTrack.SafeSerialize(payload)
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG|" .. msg, "GUILD")
+    C_ChatInfo.SendAddonMessage("RaidTrackSync", "CFG|" .. msg, "GUILD")
+end
+
+function RaidTrack.StartGuildWipe()
+    if not RaidTrack.IsOfficer or not RaidTrack.IsOfficer() then
+        print("|cffff5555RaidTrack:|r Only officers can wipe EPGP.")
+        return
+    end
+
+    -- wygeneruj NOWY gildiowy wipeID
+    local newID = RaidTrack._GenerateGuildWipeID and RaidTrack._GenerateGuildWipeID() or
+                      (tostring(time()) .. tostring(math.random(10000, 99999)))
+    RaidTrackDB.epgpWipeID = newID
+
+    -- 1) ogłoś CFG z wipe=true
+    RaidTrack.BroadcastSettings({
+        wipe = true
+    })
+
+    -- 2) natychmiast wyślij FULL (żeby odbiorcy mieli nie-pusty stan do przyjęcia)
+    --    - używamy istniejącej ścieżki SendSyncDataTo(...) w trybie pełnym dla wszystkich online officerów/członków gildii
+    --    - tu, dla prostoty, po prostu poproś o rozgłoszenie pełnych danych:
+    if RaidTrack.SendSyncDataTo then
+        -- wyślij FULL „na skróty” do całej gildii: poproś każdego online o REQ_SYNC, albo pętla po rosterze i wyślij full
+        -- Masz już w kodzie mechanizm REQ_SYNC; najprościej:
+        C_Timer.After(0.2, function()
+            if RaidTrack.RequestSyncFromGuild then
+                RaidTrack.RequestSyncFromGuild()
+            end
+        end)
+    end
+
+    print("|cff00ff88RaidTrack:|r Guild wipe announced. Full sync will follow.")
+end
+
+local function ApplyIncomingCfg(data, sender)
+    -- data = { settings = { ..., epgpWipeID = "...", wipe = bool } }
+    if type(data) ~= "table" or type(data.settings) ~= "table" then
+        return
+    end
+    RaidTrack._cfgSeen = true
+    RaidTrack._lastCfgFrom = Ambiguate(sender or "", "none")
+
+    local s = data.settings
+    -- aktualizuj ustawienia UI / uprawnień jak dotychczas
+    if type(s.minSyncRank) == "number" then
+        RaidTrackDB.settings.minSyncRank = s.minSyncRank
+    end
+    if type(s.officerOnly) ~= "nil" then
+        RaidTrackDB.settings.officerOnly = s.officerOnly
+    end
+    if type(s.autoSync) ~= "nil" then
+        RaidTrackDB.settings.autoSync = s.autoSync
+    end
+    if type(s.minUITabRankIndex) == "number" then
+        RaidTrackDB.settings.minUITabRankIndex = s.minUITabRankIndex
+    end
+
+    -- stabilizacja wipeID (bez auto-wipe’u!)
+    if type(s.epgpWipeID) == "string" and s.epgpWipeID ~= "" then
+        -- przyjmij „źródło prawdy”, ale NIE czyść niczego tutaj
+        RaidTrackDB.epgpWipeID = s.epgpWipeID
+    end
+
+    -- jawny wipe? TYLKO ustaw flagę i czekaj na FULL z EPGP
+    if s.wipe == true then
+        RaidTrack._pendingWipe = true
+        RaidTrack.AddDebugMessage("CFG: wipe requested; waiting for FULL with non-empty EPGP")
+    end
+
+    -- lokalne odświeżenie UI (jak u Ciebie wcześniej)
+    if RaidTrack.ApplyUITabVisibility then
+        RaidTrack.ApplyUITabVisibility()
+    end
+    if RaidTrack.RefreshMinimapMenu then
+        RaidTrack.RefreshMinimapMenu()
+    end
+end
+
+local function _hasNonEmptyEPGP(tbl)
+    if type(tbl) ~= "table" then return false end
+    for _ in pairs(tbl) do
+        return true
+    end
+    return false
+end
+
+local function _applyFullSnapshot(full, from)
+    -- full = { epgp = {...}, loot = {...}, epgpLog = {...}, settings = {...}, epgpWipeID = "..." }
+    if type(full) ~= "table" then return false end
+
+    -- jeśli mamy czekać na wipe, to wymagamy nie-pustego EPGP:
+    if RaidTrack._pendingWipe then
+        if not _hasNonEmptyEPGP(full.epgp) then
+            RaidTrack.AddDebugMessage("FULL refused: pending wipe but EPGP is empty; requesting resend.")
+            if C_ChatInfo and from then
+                C_ChatInfo.SendAddonMessage("RaidTrackSync", "REQ_SYNC|0|0", "WHISPER", from)
+            end
+            return false
+        end
+        -- jasny wipe: czyścimy i wgrywamy snapshot
+        RaidTrackDB.epgp           = type(full.epgp) == "table" and full.epgp or {}
+        RaidTrackDB.lootHistory    = type(full.loot) == "table" and full.loot or {}
+        RaidTrackDB.epgpLog        = type(full.epgpLog) == "table" and { changes = full.epgpLog, lastId = 0 } or { changes = {}, lastId = 0 }
+        -- podbij stany sync
+        RaidTrackDB.syncStates     = {}
+        RaidTrackDB.lootSyncStates = {}
+        -- ustaw ID z FULL-a (jeśli jest), inaczej zostaw to z CFG
+        if type(full.epgpWipeID) == "string" and full.epgpWipeID ~= "" then
+            RaidTrackDB.epgpWipeID = full.epgpWipeID
+        end
+        RaidTrack._pendingWipe = false
+        RaidTrack.AddDebugMessage("FULL applied with wipe.")
+        return true
+    else
+        -- brak wipe: po prostu przyjmij snapshot, ale NIE czyść lokalnych jeśli brakuje epgp
+        if type(full.epgp) == "table" and _hasNonEmptyEPGP(full.epgp) then
+            RaidTrackDB.epgp           = full.epgp
+        end
+        if type(full.loot) == "table" then
+            RaidTrackDB.lootHistory    = full.loot
+        end
+        if type(full.epgpLog) == "table" then
+            RaidTrackDB.epgpLog        = { changes = full.epgpLog, lastId = 0 }
+        end
+        if type(full.settings) == "table" then
+            for k, v in pairs(full.settings) do
+                RaidTrackDB.settings[k] = v
+            end
+        end
+        if type(full.epgpWipeID) == "string" and full.epgpWipeID ~= "" then
+            RaidTrackDB.epgpWipeID = full.epgpWipeID
+        end
+        RaidTrack.AddDebugMessage("FULL applied (no wipe).")
+        return true
+    end
+end
+
+-- (opcjonalnie) slash:
+SLASH_RTWIPEEPGP1 = "/rtwipeepgp"
+SlashCmdList["RTWIPEEPGP"] = function()
+    RaidTrack.StartGuildWipe()
 end
 
 local mf = CreateFrame("Frame")
 mf:RegisterEvent("CHAT_MSG_ADDON")
 mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
-    -- 🧩 Chunkowany odbiór aukcji
+    -- 🧩 Aukcje (pozostaje jak było)
     if prefix == "auction" and sender ~= UnitName("player") then
         if msg:sub(1, 8) == "RTCHUNK^" then
             RaidTrack.HandleChunkedAuctionPiece(sender, msg)
-        else
-
         end
         return
     end
 
-    -- 🔹 Dalej tylko jeśli to standardowy sync
+    -- 🔹 Dalej tylko nasz sync EPGP/loot
     if prefix ~= SYNC_PREFIX or sender == UnitName("player") then
         return
     end
-    local who = Ambiguate(sender, "none")
+    local who = Ambiguate(sender or "", "none")
 
-    -- 🔽 Obsługa starego systemu aukcyjnego (prefix RaidTrackSync)
+    -- 🔽 Stare AUCTION_* (legacy) – bez zmian
     if msg:sub(1, 13) == "AUCTION_ITEM|" then
         local payload = msg:sub(14)
-
         local ok, data = RaidTrack.SafeDeserialize(payload)
         if ok and data and data.auctionID and data.item then
             RaidTrack.partialAuction = RaidTrack.partialAuction or {}
             RaidTrack.partialAuction[data.auctionID] = RaidTrack.partialAuction[data.auctionID] or {
-                items = {},
-                leader = "",
-                started = 0,
-                duration = 0
+                items = {}, leader = "", started = 0, duration = 0
             }
-
             table.insert(RaidTrack.partialAuction[data.auctionID].items, {
-                link = data.item.link,
-                gp = data.item.gp,
-                responses = {}
+                link = data.item.link, gp = data.item.gp, responses = {}
             })
-
         else
             RaidTrack.AddDebugMessage("Failed to deserialize AUCTION_ITEM")
         end
         return
-    end
-
-    -- 🔽 (tu zostawiasz resztę: AUCTION_START|, PING, PONG, CFG, REQ_SYNC itd.)
-
-    if msg:sub(1, 14) == "AUCTION_START|" then
+    elseif msg:sub(1, 14) == "AUCTION_START|" then
         local payload = msg:sub(15)
-
         local ok, data = RaidTrack.SafeDeserialize(payload)
-
-        -- Logowanie wyników deserializacji
-
         if ok and data and data.auctionID then
             C_Timer.After(0.3, function()
-                local auctionItems = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[data.auctionID] or
-                                         {}
+                local auctionItems = RaidTrack.pendingAuctionItems and RaidTrack.pendingAuctionItems[data.auctionID] or {}
                 data.items = auctionItems
                 RaidTrack.ReceiveAuctionHeader(data)
                 RaidTrack.pendingAuctionItems[data.auctionID] = nil
@@ -368,8 +487,8 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         return
     end
 
+    -- 🔽 PING/PONG/REQ_SYNC/ACK
     if msg == "PING" then
-
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PONG", "WHISPER", who)
         return
     elseif msg == "PONG" and RaidTrack.pendingSends[who] then
@@ -377,233 +496,111 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         RaidTrack.SendChunkBatch(who)
         return
     elseif msg == "PONG" then
-
-        -- No data was pending, but PONG received -> treat as noop sync
         RaidTrack.lastSyncTime = time()
-
         return
-    elseif msg:sub(1, 9) == "REQ_SYNC|" then
+    elseif msg:sub(1,9) == "REQ_SYNC|" then
         local _, epStr, lootStr = strsplit("|", msg)
-        local knownEP = tonumber(epStr) or 0
+        local knownEP   = tonumber(epStr)  or 0
         local knownLoot = tonumber(lootStr) or 0
         RaidTrack.SendSyncDataTo(who, knownEP, knownLoot)
         return
-    elseif msg:sub(1, 4) == "ACK|" then
+    elseif msg:sub(1,4) == "ACK|" then
         local idx = tonumber(msg:sub(5))
         local p = RaidTrack.pendingSends[who]
-        if p and p.chunks[idx] then
-            p.chunks[idx] = nil
-        end
+        if p and p.chunks[idx] then p.chunks[idx] = nil end
         return
-    elseif msg:sub(1, 4) == "CFG|" then
+    elseif msg:sub(1,4) == "CFG|" then
         local cfgStr = msg:sub(5)
         local ok, data = RaidTrack.SafeDeserialize(cfgStr)
-        if not ok then
-            return
-        end
-
-        -- 1) Obsługa wipe announcement (data.wipe == true)
-        if data.wipe and tonumber(data.epgpWipeID or 0) then
-            local incoming = tonumber(data.epgpWipeID) or 0
-            local myWipe = tonumber(RaidTrackDB.epgpWipeID or 0) or 0
-            if incoming > myWipe then
-                -- wyczyść lokalnie do zera i zapisz nowy wipeID
-                RaidTrackDB.epgp = {}
-                RaidTrackDB.lootHistory = {}
-                RaidTrackDB.epgpLog = {
-                    changes = {},
-                    lastId = 0
-                }
-                RaidTrackDB.syncStates = {}
-                RaidTrackDB.lootSyncStates = {}
-                RaidTrackDB.epgpWipeID = incoming
-
-                RaidTrack.AddDebugMessage("Received WIPE announcement. New WipeID=" .. incoming .. " reason=" ..
-                                              tostring(data.reason or "?"))
-
-                -- od razu poproś najbliższych online o FULL od zera
-                C_Timer.After(0.2, function()
-                    RaidTrack.RequestSyncFromGuild()
-                end)
-
-                if RaidTrack.UpdateEPGPList then
-                    RaidTrack.UpdateEPGPList()
-                end
-                if RaidTrack.RefreshLootTab then
-                    RaidTrack.RefreshLootTab()
-                end
-            end
-            return
-        end
-
-        -- 2) Zwykłe ustawienia (jak było)
-        if data.settings then
-            for k, v in pairs(data.settings) do
-                if v ~= nil then
-                    RaidTrackDB.settings[k] = v
-                end
-            end
-            if RaidTrack.UpdateSettingsTab then
-                RaidTrack.UpdateSettingsTab()
-            end
-            if RaidTrack.ApplyUITabVisibility then
-                RaidTrack.ApplyUITabVisibility()
-            end
-            if RaidTrack.RefreshMinimapMenu then
-                RaidTrack.RefreshMinimapMenu()
-            end
+        if ok and data then
+            ApplyIncomingCfg(data, who)   -- ✅ nowy jawny CFG (może ustawić _pendingWipe)
+        else
+            RaidTrack.AddDebugMessage("CFG: invalid or failed to deserialize")
         end
         return
     end
 
+    -- 🔽 Chunkowany FULL/DELTA
     local i, t, d = msg:match("^(%d+)|(%d+)|(.+)$")
     i, t = tonumber(i), tonumber(t)
-    if not (i and t and d) then
-        return
-    end
-    local buf = RaidTrack.chunkBuffer[who] or {
-        chunks = {},
-        total = t,
-        received = 0
-    }
+    if not (i and t and d) then return end
+
+    local buf = RaidTrack.chunkBuffer[who] or { chunks = {}, total = t, received = 0 }
     RaidTrack.chunkBuffer[who] = buf
     if not buf.chunks[i] then
         buf.chunks[i] = d
         buf.received = buf.received + 1
     end
-    if buf.received == buf.total then
-        local full = table.concat(buf.chunks)
-        RaidTrack.chunkBuffer[who] = nil
-        local ok, data = RaidTrack.SafeDeserialize(full)
-        if not ok then
-            return
-        end
+    if buf.received ~= buf.total then return end
 
-        if data.full then
-            -- 🔒 Wipe guard: jeśli nadawca ma nowszy wipeID, czyścimy się do zera i przyjmujemy ich stan
-            local incomingWipe = tonumber(data.full.epgpWipeID or 0) or 0
-            local myWipe = tonumber(RaidTrackDB.epgpWipeID or 0) or 0
-            if incomingWipe > myWipe then
-                -- hard wipe local (zero everything)
-                RaidTrackDB.epgp = {}
-                RaidTrackDB.lootHistory = {}
-                RaidTrackDB.epgpLog = {
-                    changes = {},
-                    lastId = 0
-                }
-                RaidTrackDB.syncStates = {}
-                RaidTrackDB.lootSyncStates = {}
-                RaidTrackDB.epgpWipeID = incomingWipe
+    local full = table.concat(buf.chunks)
+    RaidTrack.chunkBuffer[who] = nil
+    local ok, data = RaidTrack.SafeDeserialize(full)
+    if not ok or not data then return end
+
+    -- ===== FULL snapshot =====
+    if data.full then
+        local applied = _applyFullSnapshot(data.full, who)  -- ✅ zero implicit wipe
+        if applied then
+            -- uzupełnij stany i UI
+            local lastEP = 0
+            local ch = (data.full.epgpLog or {})
+            for _, e in ipairs(ch) do
+                if e.id and e.id > lastEP then lastEP = e.id end
             end
-
-            -- w tym momencie przyjmujemy pełne dane
-            RaidTrackDB.epgp = data.full.epgp or {}
-            RaidTrackDB.lootHistory = data.full.loot or {}
-
-            -- wyznacz maxLoot
             local maxLoot = 0
             for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-                if e.id and e.id > maxLoot then
-                    maxLoot = e.id
-                end
+                if e.id and e.id > maxLoot then maxLoot = e.id end
             end
 
-            -- ustawienia + wipeID z paczki
-            if data.full.settings then
-                for k, v in pairs(data.full.settings) do
-                    RaidTrackDB.settings[k] = v
-                end
-            end
-            if data.full.epgpWipeID then
-                RaidTrackDB.epgpWipeID = tonumber(data.full.epgpWipeID) or RaidTrackDB.epgpWipeID
-            end
-
-            RaidTrackDB.epgpLog = {
-                changes = data.full.epgpLog or {},
-                lastId = (data.full.epgpLog[#(data.full.epgpLog or {})] and data.full.epgpLog[#data.full.epgpLog].id) or
-                    0
-            }
-            local lastEP = RaidTrackDB.epgpLog.lastId or 0
-
-            -- zaktualizuj stany syncu (u siebie i nadawcy)
-            RaidTrackDB.syncStates[who] = lastEP
+            RaidTrackDB.syncStates[who]              = lastEP
             RaidTrackDB.syncStates[UnitName("player")] = lastEP
-            RaidTrackDB.lootSyncStates[who] = maxLoot
+            RaidTrackDB.lootSyncStates[who]            = maxLoot
             RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
 
             RaidTrack.lastSyncTime = time()
-            if RaidTrack.UpdateEPGPList then
-                RaidTrack.UpdateEPGPList()
-            end
-            if RaidTrack.RefreshLootTab then
-                RaidTrack.RefreshLootTab()
-            end
+            if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
+            if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
 
-            -- jeśli nadal „pusto”, spróbuj dociągnąć od gildii
             if lastEP == 0 or maxLoot == 0 then
-                C_Timer.After(2, function()
-                    RaidTrack.RequestSyncFromGuild()
-                end)
-            end
-            return
-        end
-
-        -- 🔒 jeżeli w delta przyszło pole wipeID, a jest większe niż nasze, wymuś hard reset i poproś o FULL
-        local incomingWipeDelta = tonumber(data.epgpWipeID or 0) or 0
-        local myWipe = tonumber(RaidTrackDB.epgpWipeID or 0) or 0
-        if incomingWipeDelta > myWipe then
-            RaidTrackDB.epgp = {}
-            RaidTrackDB.lootHistory = {}
-            RaidTrackDB.epgpLog = {
-                changes = {},
-                lastId = 0
-            }
-            RaidTrackDB.syncStates = {}
-            RaidTrackDB.lootSyncStates = {}
-            RaidTrackDB.epgpWipeID = incomingWipeDelta
-
-            -- poproś tego nadawcę o pełny stan od zera
-            C_Timer.After(0.2, function()
-                C_ChatInfo.SendAddonMessage("RaidTrackSync", string.format("REQ_SYNC|%d|%d", 0, 0), "WHISPER", who)
-            end)
-            return
-        end
-
-        -- normalna ścieżka dla delty
-        RaidTrack.MergeEPGPChanges(data.epgpDelta or {})
-        local newLastEP = 0
-        for _, e in ipairs(data.epgpDelta or {}) do
-            if e.id and e.id > newLastEP then
-                newLastEP = e.id
+                C_Timer.After(2, function() RaidTrack.RequestSyncFromGuild() end)
             end
         end
-        if newLastEP > 0 then
-            RaidTrackDB.syncStates[who] = newLastEP
-            RaidTrackDB.syncStates[UnitName("player")] = newLastEP
-        end
-
-        local seen = {}
-        for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-            seen[e.id] = true
-        end
-        local mx = RaidTrackDB.lootSyncStates[who] or 0
-        for _, e in ipairs(data.lootDelta or {}) do
-            if e.id and not seen[e.id] then
-                table.insert(RaidTrackDB.lootHistory, e)
-                seen[e.id] = true
-                if e.id > mx then
-                    mx = e.id
-                end
-            end
-        end
-        RaidTrackDB.lootSyncStates[who] = mx
-        if RaidTrack.RefreshLootTab then
-            RaidTrack.RefreshLootTab()
-        end
-        RaidTrack.lastSyncTime = time()
-
+        return
     end
+
+    -- ===== DELTA =====
+    if RaidTrack._pendingWipe then
+        RaidTrack.AddDebugMessage("Delta ignored: pending wipe; waiting for FULL")
+        return
+    end
+
+    -- brak implicit-wipe po wipeID w delcie – po prostu stosuj delty
+    RaidTrack.MergeEPGPChanges(data.epgpDelta or {})
+    local newLastEP = 0
+    for _, e in ipairs(data.epgpDelta or {}) do
+        if e.id and e.id > newLastEP then newLastEP = e.id end
+    end
+    if newLastEP > 0 then
+        RaidTrackDB.syncStates[who] = newLastEP
+        RaidTrackDB.syncStates[UnitName("player")] = newLastEP
+    end
+
+    local seen = {}
+    for _, e in ipairs(RaidTrackDB.lootHistory or {}) do seen[e.id] = true end
+    local mx = RaidTrackDB.lootSyncStates[who] or 0
+    for _, e in ipairs(data.lootDelta or {}) do
+        if e.id and not seen[e.id] then
+            table.insert(RaidTrackDB.lootHistory, e)
+            seen[e.id] = true
+            if e.id > mx then mx = e.id end
+        end
+    end
+    RaidTrackDB.lootSyncStates[who] = mx
+    if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
+    RaidTrack.lastSyncTime = time()
 end)
+
 
 local loginFrame = CreateFrame("Frame")
 loginFrame:RegisterEvent("PLAYER_LOGIN")
@@ -641,7 +638,9 @@ end)
 -- Jeśli msgId==nil -> LEGACY: RTCHUNK^<idx>^<total>^<chunk>
 -- Jeśli msgId  jest -> NOWY:   RTCHUNK^<msgId>^<idx>^<total>^<chunk>
 function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel)
-    if type(prefix) ~= "string" or type(payload) ~= "string" or #payload == 0 then return end
+    if type(prefix) ~= "string" or type(payload) ~= "string" or #payload == 0 then
+        return
+    end
     channel = channel or (IsInRaid() and "RAID" or "GUILD")
 
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
@@ -650,10 +649,12 @@ function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel)
 
     local MAX = 200
     local total = math.ceil(#payload / MAX)
-    if total < 1 then total = 1 end
+    if total < 1 then
+        total = 1
+    end
 
     local useNew = (type(msgId) == "string" and msgId ~= "")
-    local CTL = _G.ChatThrottleLib  -- użyj jeśli jest
+    local CTL = _G.ChatThrottleLib -- użyj jeśli jest
 
     local function build(i)
         local s = (i - 1) * MAX + 1
@@ -686,9 +687,6 @@ function RaidTrack.QueueChunkedSend(msgId, prefix, payload, channel)
         end
     end
 end
-
-
-
 
 function RaidTrack.QueueAuctionBroadcastSend(prefix, data)
     local chunks = {}
@@ -818,7 +816,7 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
                     auctionID = data.auctionID,
                     leader = headerData.leader,
                     started = headerData.started,
-                    endsAt  = headerData.endsAt,
+                    endsAt = headerData.endsAt,
                     duration = headerData.duration,
                     items = items
                 })
@@ -832,7 +830,7 @@ function RaidTrack.ReceiveAuctionChunked(sender, rawData)
                 items = items,
                 leader = headerData.leader,
                 started = headerData.started,
-                endsAt  = headerData.endsAt,
+                endsAt = headerData.endsAt,
                 duration = headerData.duration
             }
 
@@ -938,11 +936,10 @@ function RaidTrack.HandleAuctionResponse(auctionID, responseData)
     end
 end
 
-
 -- Funkcja obsługująca odebrane chunki RAID SYNC
 -- Odbiór chunków: NOWY (z msgId) i LEGACY (bez msgId)
 function RaidTrack.HandleChunkedRaidPiece(sender, message)
-    if type(message) ~= "string" or message:sub(1,8) ~= "RTCHUNK^" then
+    if type(message) ~= "string" or message:sub(1, 8) ~= "RTCHUNK^" then
         return
     end
     -- Legacy nagłówek: RTCHUNK^<idx>^<total>^<chunkData>
@@ -950,7 +947,7 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
     if not idx or not total or not chunkData then
         return
     end
-    idx   = tonumber(idx)
+    idx = tonumber(idx)
     total = tonumber(total)
 
     sender = (sender and sender ~= "") and sender or "UNKNOWN"
@@ -963,7 +960,9 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
     buf[idx] = chunkData
 
     for i = 1, total do
-        if not buf[i] then return end
+        if not buf[i] then
+            return
+        end
     end
 
     local full = table.concat(buf, "")
@@ -988,10 +987,6 @@ function RaidTrack.HandleChunkedRaidPiece(sender, message)
         RaidTrack.MergeRaidSyncData(data, sender)
     end
 end
-
-
-
-
 
 function RaidTrack.HandleChunkedAuctionPiece(sender, msg)
 

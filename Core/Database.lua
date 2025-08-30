@@ -30,7 +30,7 @@ RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {
     hide = false,
     minimapPos = 220, -- default minimap position angle
 }
-RaidTrackDB.epgpWipeID = RaidTrackDB.epgpWipeID or tostring(time()..math.random(10000,99999))
+
 
 
 
@@ -85,6 +85,10 @@ initFrame:SetScript("OnEvent", function(self, event, name)
     self:UnregisterEvent("ADDON_LOADED")
 end)
 
+-- Core/Database.lua  (helper do generowania wipeID TYLKO gdy oficer zrobi jawny wipe)
+function RaidTrack._GenerateGuildWipeID()
+    return tostring(GetServerTime and GetServerTime() or time()) .. tostring(math.random(10000, 99999))
+end
 
 -- Clear DB helper
 function RaidTrack.ClearRaidTrackDB()
