@@ -21,6 +21,9 @@ RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
 RaidTrack._cfgSeen = RaidTrack._cfgSeen or false -- mamy już jakieś CFG od oficera
 RaidTrack._pendingWipe = RaidTrack._pendingWipe or false -- czekamy na FULL z nie-pustym EPGP
 RaidTrack._lastCfgFrom = RaidTrack._lastCfgFrom or nil -- kto ostatnio wysłał CFG
+-- ostatni zastosowany snapshot FULL (podpis: wipeID|lastEP|maxLoot)
+RaidTrack._lastAppliedFullSig = RaidTrack._lastAppliedFullSig or ""
+
 
 if not C_ChatInfo.IsAddonMessagePrefixRegistered("auction") then
     C_ChatInfo.RegisterAddonMessagePrefix("auction")
@@ -99,26 +102,49 @@ function RaidTrack.SendSyncDeltaToEligible()
 end
 
 function RaidTrack.RequestSyncFromGuild()
-    if not IsInGuild() then
-        return
-    end
-    local me = UnitName("player")
-    local epID = RaidTrackDB.epgpLog and RaidTrackDB.epgpLog.lastId or 0
+    if not IsInGuild() then return end
+
+    -- cooldown 15s, żeby nie spamować przy wielokrotnych wywołaniach
+    RaidTrack._lastReqSyncAt = RaidTrack._lastReqSyncAt or 0
+    local now = (GetTime and GetTime()) or time()
+    if (now - RaidTrack._lastReqSyncAt) < 15 then return end
+    RaidTrack._lastReqSyncAt = now
+
+    local me = Ambiguate(UnitName("player"), "none")
+    local epID = (RaidTrackDB.epgpLog and RaidTrackDB.epgpLog.lastId) or 0
     local lootID = 0
     for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-        if e.id and e.id > lootID then
-            lootID = e.id
-        end
+        if e.id and e.id > lootID then lootID = e.id end
     end
-    for i = 1, GetNumGuildMembers() do
-        local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+
+    -- wybierz JEDNEGO najlepszego kandydata: najniższy rankIndex (GM/officer)
+    local minRank = tonumber(RaidTrackDB.settings.minSyncRank) or 1
+    if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
+
+    local best, bestRank = nil, 99
+    for i = 1, (GetNumGuildMembers() or 0) do
+        local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
         name = name and Ambiguate(name, "none")
-        if name ~= me and online then
-            local msg = string.format("REQ_SYNC|%d|%d", epID, lootID)
-            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, msg, "WHISPER", name)
+        if online and name ~= me then
+            if rankIndex <= minRank and rankIndex < bestRank then
+                best, bestRank = name, rankIndex
+            end
         end
     end
+    -- fallback: pierwszy lepszy online, jeśli brak oficera
+    if not best then
+        for i = 1, (GetNumGuildMembers() or 0) do
+            local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+            name = name and Ambiguate(name, "none")
+            if online and name ~= me then best = name; break end
+        end
+    end
+    if not best then return end
+
+    local msg = string.format("REQ_SYNC|%d|%d", epID, lootID)
+    C_ChatInfo.SendAddonMessage("RaidTrackSync", msg, "WHISPER", best)
 end
+
 
 function RaidTrack.SendSyncData()
     if RaidTrack.HandleSendSync then
@@ -373,15 +399,30 @@ end
 
 local function _hasNonEmptyEPGP(tbl)
     if type(tbl) ~= "table" then return false end
-    for _ in pairs(tbl) do
-        return true
-    end
+    for _ in pairs(tbl) do return true end
     return false
 end
 
 local function _applyFullSnapshot(full, from)
     -- full = { epgp = {...}, loot = {...}, epgpLog = {...}, settings = {...}, epgpWipeID = "..." }
     if type(full) ~= "table" then return false end
+
+    -- Zbuduj sygnaturę snapshotu, aby ignorować duplikaty FULL bez zmian
+    local incWipe = tostring(full.epgpWipeID or RaidTrackDB.epgpWipeID or "")
+    local incLastEP = 0
+    for _, e in ipairs(full.epgpLog or {}) do
+        if e.id and e.id > incLastEP then incLastEP = e.id end
+    end
+    local incMaxLoot = 0
+    for _, e in ipairs(full.loot or {}) do
+        if e.id and e.id > incMaxLoot then incMaxLoot = e.id end
+    end
+    local sig = incWipe .. "|" .. incLastEP .. "|" .. incMaxLoot
+
+    -- Jeżeli to NIE jest pending wipe i sygnatura się nie zmieniła, zignoruj FULL
+    if not RaidTrack._pendingWipe and RaidTrack._lastAppliedFullSig == sig then
+        return false
+    end
 
     -- jeśli mamy czekać na wipe, to wymagamy nie-pustego EPGP:
     if RaidTrack._pendingWipe then
@@ -404,18 +445,19 @@ local function _applyFullSnapshot(full, from)
             RaidTrackDB.epgpWipeID = full.epgpWipeID
         end
         RaidTrack._pendingWipe = false
+        RaidTrack._lastAppliedFullSig = sig
         RaidTrack.AddDebugMessage("FULL applied with wipe.")
         return true
     else
         -- brak wipe: po prostu przyjmij snapshot, ale NIE czyść lokalnych jeśli brakuje epgp
         if type(full.epgp) == "table" and _hasNonEmptyEPGP(full.epgp) then
-            RaidTrackDB.epgp           = full.epgp
+            RaidTrackDB.epgp = full.epgp
         end
         if type(full.loot) == "table" then
-            RaidTrackDB.lootHistory    = full.loot
+            RaidTrackDB.lootHistory = full.loot
         end
         if type(full.epgpLog) == "table" then
-            RaidTrackDB.epgpLog        = { changes = full.epgpLog, lastId = 0 }
+            RaidTrackDB.epgpLog = { changes = full.epgpLog, lastId = 0 }
         end
         if type(full.settings) == "table" then
             for k, v in pairs(full.settings) do
@@ -425,10 +467,12 @@ local function _applyFullSnapshot(full, from)
         if type(full.epgpWipeID) == "string" and full.epgpWipeID ~= "" then
             RaidTrackDB.epgpWipeID = full.epgpWipeID
         end
+        RaidTrack._lastAppliedFullSig = sig
         RaidTrack.AddDebugMessage("FULL applied (no wipe).")
         return true
     end
 end
+
 
 -- (opcjonalnie) slash:
 SLASH_RTWIPEEPGP1 = "/rtwipeepgp"
@@ -560,9 +604,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
             if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
 
-            if lastEP == 0 or maxLoot == 0 then
-                C_Timer.After(2, function() RaidTrack.RequestSyncFromGuild() end)
-            end
+            
         end
         return
     end
