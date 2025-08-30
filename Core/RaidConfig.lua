@@ -60,6 +60,10 @@ function RaidTrack.SaveRaidPreset(name, config)
 
     -- zapis/aktualizacja
     RaidTrackDB.raidPresets[name] = cleanConfig
+    -- bump rewizji (potrzebne do diff-sync)
+RaidTrackDB._presetRevisions = RaidTrackDB._presetRevisions or {}
+RaidTrackDB._presetRevisions[name] = time()
+
     -- ustaw rewizję (używamy timestampu -> łatwe porównanie po stronie odbiorcy)
     RaidTrackDB._presetRevisions[name]  = time()
     -- jeśli był tombstone, usuń go (reanimacja)
