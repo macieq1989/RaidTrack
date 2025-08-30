@@ -149,9 +149,7 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
                 maxLoot = e.id
             end
         end
-        if maxEP == 0 and maxLoot == 0 then
-            return
-        end
+    
 
         payload = {
             full = {

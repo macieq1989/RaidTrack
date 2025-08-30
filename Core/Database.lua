@@ -34,6 +34,9 @@ RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {
 
 
 
+if type(RaidTrackDB.epgpWipeID) ~= "string" then
+    RaidTrackDB.epgpWipeID = "0"
+end
 
 
 

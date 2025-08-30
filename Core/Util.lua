@@ -789,39 +789,60 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
         return
     end
 
-    -- nadaj nowy wipeID
-    local wipeID = time()
-    RaidTrackDB.epgpWipeID = wipeID
+    -- 1) nowy gildiowy wipeID (spójny string)
+    local newID = (RaidTrack._GenerateGuildWipeID and RaidTrack._GenerateGuildWipeID())
+                  or (tostring(time()) .. tostring(math.random(10000,99999)))
+    RaidTrackDB.epgpWipeID = newID
 
-    -- lokalny „full zero”
-    RaidTrackDB.epgp = {}
+    -- 2) zbuduj baseline: unia kluczy z obecnej bazy + roster gildii
+    local baseline = {}
+    local known = {}
+    for p in pairs(RaidTrackDB.epgp or {}) do
+        local name = Ambiguate(p, "none")
+        known[name] = true
+    end
+    if IsInGuild() then
+        for i = 1, GetNumGuildMembers() do
+            local full = GetGuildRosterInfo(i)
+            if full then
+                local name = Ambiguate(full, "none")
+                known[name] = true
+            end
+        end
+    end
+    for name in pairs(known) do
+        if name and name ~= "" then
+            baseline[name] = { ep = 0, gp = 1 } -- gp min=1 (spójne z ApplyEPGPChange)
+        end
+    end
+
+    -- 3) podmień lokalny stan na baseline (NIE na pusty)
+    RaidTrackDB.epgp        = baseline
     RaidTrackDB.lootHistory = {}
-    RaidTrackDB.epgpLog = { changes = {}, lastId = 0 }
-    RaidTrackDB.syncStates = {}
+    RaidTrackDB.epgpLog     = { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates  = {}
     RaidTrackDB.lootSyncStates = {}
 
-    -- ogarnij UI
     if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
     if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
 
-    -- ogłoś wipe całej gildii – lekkie info + wymuszenie FULL
-    local announce = { wipe = true, epgpWipeID = wipeID, reason = reason }
+    -- 4) ogłoś wipe do gildii (CFG: wipe=true + epgpWipeID)
+    local announce = { settings = { epgpWipeID = newID, wipe = true } }
     local msg = RaidTrack.SafeSerialize(announce)
     C_ChatInfo.SendAddonMessage("RaidTrackSync", "CFG|" .. msg, "GUILD")
 
-    -- Zachęć online do natychmiastowego full pulla OD nas (pustego, ale z nowym wipeID)
-    C_Timer.After(0.3, function()
-        if IsInGuild() then
-            for i=1, GetNumGuildMembers() do
-                local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
-                name = name and Ambiguate(name, "none")
-                if online and name and name ~= UnitName("player") then
-                    C_ChatInfo.SendAddonMessage("RaidTrackSync",
-                        string.format("REQ_SYNC|%d|%d", 0, 0), "WHISPER", name)
-                end
+    -- 5) natychmiastowy FULL baseline do online’owych (żeby pendingWipe mógł *przyjąć* snapshot)
+    if IsInGuild() then
+        local me = UnitName("player")
+        for i = 1, GetNumGuildMembers() do
+            local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+            name = name and Ambiguate(name, "none")
+            if online and name and name ~= me then
+                -- wymuszamy tryb FULL od zera
+                RaidTrack.SendSyncDataTo(name, 0, 0)
             end
         end
-    end)
+    end
 
-    RaidTrack.AddDebugMessage("Global wipe done (allplayers). WipeID="..wipeID.." reason="..reason)
+    RaidTrack.AddDebugMessage(("Global wipe announced. WipeID=%s reason=%s; baseline sent to online guild."):format(newID, reason))
 end
