@@ -33,8 +33,6 @@ local CLASS_ICON_TCOORDS = CLASS_ICON_TCOORDS or {
     EVOKER = {0, 0.25, 0.75, 1}
 }
 
-
-
 local function GetClassIconTextureCoords(class)
     return unpack(CLASS_ICON_TCOORDS[class] or {0, 1, 0, 1})
 end
@@ -106,53 +104,51 @@ function RaidTrack.UpdateGuildRoster()
 
     RaidTrack.RenderGuildRows()
 end
+
 function RaidTrack.RenderGuildRows()
     if not guildTabData.scrollFrame then
         return
     end
+
     -- Safe cleanup of highlight textures before recycling rows
-for _, child in ipairs(guildTabData.scrollFrame.children or {}) do
-    if child._highlightTexture then
-        child._highlightTexture:SetColorTexture(0, 0, 0, 0)
-        child._highlightTexture:Hide()
-        child._highlightTexture:SetParent(nil)
-        child._highlightTexture = nil
+    for _, child in ipairs(guildTabData.scrollFrame.children or {}) do
+        if child._highlightTexture then
+            child._highlightTexture:SetColorTexture(0, 0, 0, 0)
+            child._highlightTexture:Hide()
+            child._highlightTexture:SetParent(nil)
+            child._highlightTexture = nil
+        end
     end
-end
 
-guildTabData.scrollFrame:ReleaseChildren()
-guildTabData.visibleRows = {}
-
+    guildTabData.scrollFrame:ReleaseChildren()
+    guildTabData.visibleRows = {}
 
     local header = AceGUI:Create("SimpleGroup")
     header:SetLayout("Flow")
     header:SetFullWidth(true)
     header:SetHeight(24)
     for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}, {"RT", 44}}) do
-
-
-    local lbl = AceGUI:Create("Label")
-    lbl:SetText(h[1])
-    lbl:SetWidth(h[2])
-    lbl:SetJustifyH("CENTER")
-    lbl:SetFontObject(GameFontNormal)
-    header:AddChild(lbl)
-end
-
+        local lbl = AceGUI:Create("Label")
+        lbl:SetText(h[1])
+        lbl:SetWidth(h[2])
+        lbl:SetJustifyH("CENTER")
+        lbl:SetFontObject(GameFontNormal)
+        header:AddChild(lbl)
+    end
     guildTabData.scrollFrame:AddChild(header)
 
     for i = 1, math.min(guildTabData.rowPoolSize, #guildTabData.currentData) do
         local d = guildTabData.currentData[i]
         local row = AceGUI:Create("SimpleGroup")
-        
 
         row:SetLayout("Flow")
         row:SetFullWidth(true)
         row:SetHeight(24)
-        -- Add highlight texture
-RaidTrack.ApplyHighlight(row, IsSelected(d.name))
 
-
+        -- highlight wybranych
+        if RaidTrack.ApplyHighlight then
+            RaidTrack.ApplyHighlight(row, IsSelected(d.name))
+        end
 
         local icon = AceGUI:Create("Icon")
         icon:SetImage("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
@@ -162,75 +158,67 @@ RaidTrack.ApplyHighlight(row, IsSelected(d.name))
         icon.image:SetTexCoord(GetClassIconTextureCoords(d.class))
         row:AddChild(icon)
 
-        local col = RAID_CLASS_COLORS[d.class] or {
-            r = 1,
-            g = 1,
-            b = 1
-        }
+        local col = RAID_CLASS_COLORS[d.class] or { r = 1, g = 1, b = 1 }
         if not d.online then
-            col = {
-                r = col.r * 0.5,
-                g = col.g * 0.5,
-                b = col.b * 0.5
-            }
+            col = { r = col.r * 0.5, g = col.g * 0.5, b = col.b * 0.5 }
         end
 
-      -- pobierz wersję klienta (zielony = zgodny, żółty = starszy, szary = brak danych)
+        
+       -- pobierz wersję klienta (zielony/żółty/niebieski numer; "old" pomarańczowe; "-" czerwone)
 local verText, verColor = "-", { r = 0.70, g = 0.70, b = 0.70 }
-if RaidTrack.GetCachedClientVersion then
-    local v, c = RaidTrack.GetCachedClientVersion(d.name)
-    if v then verText = v end
-    if c then verColor = c end
+if RaidTrack.GetClientVersionStatus then
+    verText, verColor = RaidTrack.GetClientVersionStatus(d.name)
+end
+
+-- Jeżeli online i wciąż "-", spróbuj delikatnie odpalić sondę (throttle w środku)
+if verText == "-" and d.online and RaidTrack.ProbeClientVersion then
+    RaidTrack.ProbeClientVersion(d.name)
 end
 
 local fields = {
-    { text = d.name,                   width = 140 },
-    { text = d.ep,                     width = 60  },
-    { text = d.gp,                     width = 60  },
-    { text = string.format("%.2f", d.pr), width = 60  },
-    -- nowa kolumna „RT” z wersją i własnym kolorem
-    { text = verText,                  width = 44,  overrideColor = verColor },
+    { text = d.name,                       width = 140 },
+    { text = d.ep,                         width = 60  },
+    { text = d.gp,                         width = 60  },
+    { text = string.format("%.2f", d.pr),  width = 60  },
+    { text = verText,                      width = 44,  overrideColor = verColor },
 }
 
+
         for _, field in ipairs(fields) do
-    local lbl = AceGUI:Create("Label")
-    lbl:SetText(tostring(field.text))
-    lbl:SetWidth(field.width)
-    lbl:SetJustifyH("CENTER")
-    lbl:SetFontObject(GameFontNormal)
-    local useCol = field.overrideColor or col
-    lbl:SetColor(useCol.r, useCol.g, useCol.b)
-    row:AddChild(lbl)
-end
-
-
+            local lbl = AceGUI:Create("Label")
+            lbl:SetText(tostring(field.text))
+            lbl:SetWidth(field.width)
+            lbl:SetJustifyH("CENTER")
+            lbl:SetFontObject(GameFontNormal)
+            local useCol = field.overrideColor or col
+            if lbl.SetColor then
+                lbl:SetColor(useCol.r, useCol.g, useCol.b)
+            end
+            row:AddChild(lbl)
+        end
 
         row.frame:SetScript("OnMouseDown", function()
             local idx = i
-            local d = guildTabData.currentData[idx]
-            if not d then
-                return
-            end
+            local drow = guildTabData.currentData[idx]
+            if not drow then return end
 
             if IsShiftKeyDown() and guildTabData.lastSelectedIdx then
                 ClearSelection()
                 SetSelectedRange(guildTabData.currentData, guildTabData.lastSelectedIdx, idx)
             elseif IsControlKeyDown() then
-                guildTabData.selected[d.name] = not guildTabData.selected[d.name]
+                guildTabData.selected[drow.name] = not guildTabData.selected[drow.name]
             else
                 ClearSelection()
-                guildTabData.selected[d.name] = true
+                guildTabData.selected[drow.name] = true
             end
             guildTabData.lastSelectedIdx = idx
 
             local selectedCount = 0
-            for _ in pairs(guildTabData.selected) do
-                selectedCount = selectedCount + 1
-            end
+            for _ in pairs(guildTabData.selected) do selectedCount = selectedCount + 1 end
             if guildTabData.countLabel then
                 local displayed = math.min(guildTabData.rowPoolSize, #guildTabData.currentData)
                 guildTabData.countLabel:SetText("Displaying: " .. displayed .. " / " .. #guildTabData.currentData ..
-                                                    " | Selected: " .. selectedCount)
+                    " | Selected: " .. selectedCount)
             end
 
             RaidTrack.RenderGuildRows()
@@ -253,12 +241,10 @@ end
 end
 
 function RaidTrack:Render_guildTab(container)
-
--- choose a safe parent for everything in this tab
-local parent = (container and container.frame)
-    or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
-    or UIParent
-
+    -- choose a safe parent for everything in this tab
+    local parent = (container and container.frame)
+        or (RaidTrack.mainFrame and RaidTrack.mainFrame.frame)
+        or UIParent
 
     container:SetLayout("Fill")
     local mainGroup = AceGUI:Create("SimpleGroup")
@@ -301,19 +287,28 @@ local parent = (container and container.frame)
     searchBox:SetLabel("Search")
     searchBox:SetText(guildTabData.filter)
     searchBox:SetCallback("OnTextChanged", function(_, _, text)
-    guildTabData.filter = text:lower()
-    guildTabData.forceRefresh = true
+        guildTabData.filter = text:lower()
+        guildTabData.forceRefresh = true
 
-    if guildSearchDebounceTimer then
-        guildSearchDebounceTimer:Cancel()
-    end
+        if guildSearchDebounceTimer then
+            guildSearchDebounceTimer:Cancel()
+        end
 
-    guildSearchDebounceTimer = C_Timer.NewTimer(0.3, function()
-        RaidTrack.UpdateGuildRoster()
+        guildSearchDebounceTimer = C_Timer.NewTimer(0.3, function()
+            RaidTrack.UpdateGuildRoster()
+        end)
     end)
-end)
-
     rightPanel:AddChild(searchBox)
+
+    -- Ręczny rescan wersji
+    local rescanBtn = AceGUI:Create("Button")
+    rescanBtn:SetText("Rescan versions")
+    rescanBtn:SetFullWidth(true)
+    rescanBtn:SetCallback("OnClick", function()
+        if RaidTrack.SendMyVersion then RaidTrack.SendMyVersion() end
+        if RaidTrack.RequestVersionSweep then RaidTrack.RequestVersionSweep() end
+    end)
+    rightPanel:AddChild(rescanBtn)
 
     local epInput = AceGUI:Create("EditBox")
     epInput:SetLabel("EP")
@@ -334,19 +329,27 @@ end)
             end
         end
         RaidTrack.UpdateGuildRoster()
-        RaidTrack.SendSyncData()
+        if RaidTrack.SendSyncData then RaidTrack.SendSyncData() end
     end)
     rightPanel:AddChild(applyBtn)
 
     RaidTrack.UpdateGuildRoster()
-    
 
+    -- po wejściu w zakładkę: ogłoś moją wersję i poproś o wersje (lekki delay)
+    if RaidTrack.SendMyVersion then
+        C_Timer.After(0.1, RaidTrack.SendMyVersion)
+    end
+    if RaidTrack.RequestVersionSweep then
+        C_Timer.After(0.6, RaidTrack.RequestVersionSweep)
+    end
 end
+
 RaidTrack.UpdateGuildList = function()
     if RaidTrack.UpdateGuildRoster then
         RaidTrack.UpdateGuildRoster()
     end
 end
+
 function RaidTrack.DeactivateGuildTab()
     -- Close any AceGUI dropdown pullouts created by Guild tab
     if RaidTrack.guildRankDropdown and RaidTrack.guildRankDropdown.pullout then
@@ -363,4 +366,11 @@ function RaidTrack.DeactivateGuildTab()
 
     -- Safety: hide tooltip
     GameTooltip:Hide()
+end
+
+-- Pozwala Core/Version.lua odświeżyć tabelę po odebraniu VER
+function RaidTrack.RefreshGuildTab()
+    if guildTabData and guildTabData.scrollFrame then
+        RaidTrack.UpdateGuildRoster()
+    end
 end
