@@ -10,8 +10,11 @@ RaidTrack.lastRaidSyncID = nil
 
 -- ==== DB guards ====
 RaidTrackDB = RaidTrackDB or {}
-RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
-RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+RaidTrackDB.raidPresets         = RaidTrackDB.raidPresets         or {}
+RaidTrackDB._presetRevisions    = RaidTrackDB._presetRevisions    or {}
+RaidTrackDB._presetTombstones   = RaidTrackDB._presetTombstones   or {}
+RaidTrackDB.raidInstances       = RaidTrackDB.raidInstances       or {}
+RaidTrackDB._instanceTombstones = RaidTrackDB._instanceTombstones or {}
 -- ====================
 
 -----------------------------------------------------
@@ -56,9 +59,7 @@ local function _pruneTombstones()
 end
 
 local function findInstanceById(id)
-    if not id then
-        return nil
-    end
+    if not id then return nil end
     for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
         if tostring(r.id) == tostring(id) then
             return r
@@ -68,80 +69,52 @@ local function findInstanceById(id)
 end
 
 local function isInstanceEnded(inst)
-    if not inst then
-        return false
-    end
-    if tonumber(inst.endAt) then
-        return true
-    end
-    if tostring(inst.status or ""):lower() == "ended" then
-        return true
-    end
+    if not inst then return false end
+    if tonumber(inst.endAt) then return true end
+    if tostring(inst.status or ""):lower() == "ended" then return true end
     return false
 end
 
 -- Czyść lokalny activeRaidID, jeśli odpowiadająca instancja jest zakończona.
 function RaidTrack.ReconcileActiveRaidDCGuard()
     local active = RaidTrack.activeRaidID or RaidTrackDB.activeRaidID
-    if not active then
-        return
-    end
+    if not active then return end
     local inst = findInstanceById(active)
     if isInstanceEnded(inst) then
-        RaidTrack.activeRaidID = nil
+        RaidTrack.activeRaidID   = nil
         RaidTrackDB.activeRaidID = nil
         if RaidTrack.OnRaidEnded then
             pcall(RaidTrack.OnRaidEnded, tostring(inst.id), tonumber(inst.endAt) or time(), "reconcile")
         end
-        if RaidTrack.UpdateRaidTabStatus then
-            pcall(RaidTrack.UpdateRaidTabStatus)
-        end
-        if RaidTrack.RefreshRaidDropdown then
-            pcall(RaidTrack.RefreshRaidDropdown)
-        end
+        if RaidTrack.UpdateRaidTabStatus then pcall(RaidTrack.UpdateRaidTabStatus) end
+        if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
     end
 end
+
 -- Throttle'owane odświeżenie UI po sync
 RaidTrack._uiRefreshPending = false
 function RaidTrack.RequestUIRefresh(reason)
-    if RaidTrack._uiRefreshPending then
-        return
-    end
+    if RaidTrack._uiRefreshPending then return end
     RaidTrack._uiRefreshPending = true
     C_Timer.After(0.15, function()
         RaidTrack._uiRefreshPending = false
-        -- Odśwież to, co masz w addon'ie (pcall = bezpiecznie jeśli czegoś nie ma)
-        if RaidTrack.RefreshRaidDropdown then
-            pcall(RaidTrack.RefreshRaidDropdown)
-        end
-        if RaidTrack.UpdateRaidTabStatus then
-            pcall(RaidTrack.UpdateRaidTabStatus)
-        end
-        if RaidTrack.RefreshRaidTab then
-            pcall(RaidTrack.RefreshRaidTab)
-        end
-        if RaidTrack.RefreshPresetDropdown then
-            pcall(RaidTrack.RefreshPresetDropdown)
-        end
-        if RaidTrack.RefreshBossesView then
-            pcall(RaidTrack.RefreshBossesView)
-        end
+        if RaidTrack.RefreshRaidDropdown   then pcall(RaidTrack.RefreshRaidDropdown)   end
+        if RaidTrack.UpdateRaidTabStatus   then pcall(RaidTrack.UpdateRaidTabStatus)   end
+        if RaidTrack.RefreshRaidTab        then pcall(RaidTrack.RefreshRaidTab)        end
+        if RaidTrack.RefreshPresetDropdown then pcall(RaidTrack.RefreshPresetDropdown) end
+        if RaidTrack.RefreshBossesView     then pcall(RaidTrack.RefreshBossesView)     end
     end)
 end
 
 -- Debounce/Batch flush RTSYNC (żeby nie floodować serwera)
 RaidTrack._rs_flushScheduled = false
 function RaidTrack.RequestRaidSyncFlush(delay)
-    delay = tonumber(delay) or 0.4 -- 400 ms ok do “złapania” serii delete/save
-    if RaidTrack._rs_flushScheduled then
-        return
-    end
+    delay = tonumber(delay) or 0.4
+    if RaidTrack._rs_flushScheduled then return end
     RaidTrack._rs_flushScheduled = true
     C_Timer.After(delay, function()
         RaidTrack._rs_flushScheduled = false
-        if RaidTrack.SendRaidSyncData then
-            pcall(RaidTrack.SendRaidSyncData)
-        end
+        if RaidTrack.SendRaidSyncData then pcall(RaidTrack.SendRaidSyncData) end
     end)
 end
 
@@ -162,7 +135,7 @@ function RaidTrack.SendRaidSyncData(opts)
     local activeID, activePreset = nil, nil
     for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
         if tostring(r.status or ""):lower() == "started" and not tonumber(r.endAt) then
-            activeID = r.id
+            activeID     = r.id
             activePreset = r.preset
             break
         end
@@ -170,62 +143,45 @@ function RaidTrack.SendRaidSyncData(opts)
 
     -- ZBIERZ tombstony (od każdego, nie tylko oficera)
     local removedPresets, removedInstances = {}, {}
-    for k, v in pairs(RaidTrackDB._presetTombstones or {}) do
-        if v then
-            table.insert(removedPresets, k)
-        end
-    end
-    for k, v in pairs(RaidTrackDB._instanceTombstones or {}) do
-        if v then
-            table.insert(removedInstances, k)
-        end
-    end
-    if #removedPresets == 0 then
-        removedPresets = nil
-    end
-    if #removedInstances == 0 then
-        removedInstances = nil
-    end
+    for k, v in pairs(RaidTrackDB._presetTombstones or {})   do if v then table.insert(removedPresets, k)   end end
+    for k, v in pairs(RaidTrackDB._instanceTombstones or {}) do if v then table.insert(removedInstances, k) end end
+    if #removedPresets   == 0 then removedPresets   = nil end
+    if #removedInstances == 0 then removedInstances = nil end
 
     local payload = {
-        raidSyncID = RaidTrack.GenerateRaidSyncID(),
-        presets = RaidTrackDB.raidPresets or {},
-        instances = RaidTrackDB.raidInstances or {},
-        removedPresets = removedPresets,
+        raidSyncID       = RaidTrack.GenerateRaidSyncID(),
+        presets          = RaidTrackDB.raidPresets or {},
+        presetRevisions  = RaidTrackDB._presetRevisions or {},
+        instances        = RaidTrackDB.raidInstances or {},
+        removedPresets   = removedPresets,
         removedInstances = removedInstances,
-        activeID = activeID,
-        activePreset = activePreset
+        activeID         = activeID,
+        activePreset     = activePreset,
     }
 
     RaidTrack.lastRaidSyncID = payload.raidSyncID
 
     local serialized = RaidTrack.SafeSerialize(payload)
-    if not serialized then
-        return
-    end
+    if not serialized then return end
 
     -- Kanał: aktywny -> RAID, inaczej -> GUILD (jeśli w gildii)
     local hasDeletes = (removedPresets ~= nil) or (removedInstances ~= nil)
-    local channel = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
+    local channel    = activeID and "RAID" or (inGuild and "GUILD" or "RAID")
 
     RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, channel)
 
-    -- DODAJ TO: jeżeli trwa raid i są delet’y, doślij też na GUILD
+    -- jeżeli raid trwa i są delet’y, doślij też na GUILD (offline’y to odbiorą)
     if activeID and hasDeletes and inGuild then
         RaidTrack.QueueChunkedSend(payload.raidSyncID, SYNC_PREFIX, serialized, "GUILD")
     end
-
 end
 
 -- Szybki publiczny helper do broadcastu (np. po end raidu)
 function RaidTrack.BroadcastRaidSync()
-    RaidTrack.SendRaidSyncData({
-        allowRaid = true
-    })
+    RaidTrack.SendRaidSyncData({ allowRaid = true })
 end
 
--- Wywołaj to po faktycznym zakończeniu raidu (gdy zaktualizujesz instances/endAt/status):
--- * kanał pójdzie na GUILD (bo activeID już nie istnieje), więc inni dowiedzą się, że raid jest skończony
+-- Po faktycznym zakończeniu raidu
 function RaidTrack.BroadcastRaidEnded(raidId, endTs)
     raidId = raidId or (RaidTrack.activeRaidID or RaidTrackDB.activeRaidID)
     if raidId then
@@ -235,40 +191,51 @@ function RaidTrack.BroadcastRaidEnded(raidId, endTs)
             inst.status = "ended"
         end
     end
-    -- wyślij najnowszy obraz (bez activeID)
-    RaidTrack.SendRaidSyncData({
-        allowRaid = true
-    })
+    RaidTrack.SendRaidSyncData({ allowRaid = true })
 end
 
 -----------------------------------------------------
--- Receive: apply RTSYNC payload safely
+-- Receive: apply RTSYNC payload safely (z rewizjami)
 -----------------------------------------------------
 function RaidTrack.ApplyRaidSyncData(data, sender)
-    if type(data) ~= "table" then
-        return
-    end
+    if type(data) ~= "table" then return end
 
     -- === helpers ===
-    local function upsertPresets(dst, src)
-        if type(dst) ~= "table" or type(src) ~= "table" then
-            return false
-        end
+    local function upsertPresetsWithRevisions(dst, src, inRevs)
+        if type(dst) ~= "table" or type(src) ~= "table" then return false end
         local changed = false
+        local localRevs = RaidTrackDB._presetRevisions or {}
         for k, v in pairs(src) do
-            if dst[k] ~= v then
-                dst[k] = v
-                changed = true
+            -- pomiń, jeśli lokalnie świeżo skasowany
+            if not _isTombstonedPreset(k) then
+                local incomingRev = inRevs and inRevs[k] or nil
+                local localRev    = localRevs[k]
+                local shouldApply = false
+                if dst[k] == nil then
+                    shouldApply = true
+                elseif incomingRev and localRev then
+                    shouldApply = incomingRev > localRev
+                elseif incomingRev and not localRev then
+                    shouldApply = true
+                -- jeśli brak rewizji po obu stronach, przyjmij z sieci (żeby wyrównać)
+                elseif not incomingRev and not localRev then
+                    shouldApply = true
+                end
+
+                if shouldApply then
+                    dst[k] = v
+                    localRevs[k] = incomingRev or (localRev or time())
+                    changed = true
+                end
             end
         end
+        RaidTrackDB._presetRevisions = localRevs
         return changed
     end
 
     local function indexInstancesById(list)
         local map = {}
-        if type(list) ~= "table" then
-            return map
-        end
+        if type(list) ~= "table" then return map end
         for i = 1, #list do
             local it = list[i]
             local id = it and it.id
@@ -280,63 +247,54 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
     end
 
     local function upsertInstances(dstList, srcList)
-        if type(dstList) ~= "table" or type(srcList) ~= "table" then
-            return false
-        end
+        if type(dstList) ~= "table" or type(srcList) ~= "table" then return false end
         local changed = false
         local idx = indexInstancesById(dstList)
         for _, s in ipairs(srcList) do
             local sid = s and s.id
-            if sid ~= nil then
+            if sid ~= nil and not _isTombstonedInstance(sid) then
                 local key = tostring(sid)
                 local pos = idx[key]
                 if pos then
-                    local localInst = dstList[pos]
-                    local localEnded = (tonumber(localInst.endAt) ~= nil) or
-                                           (tostring(localInst.status or ""):lower() == "ended")
-                    local incomingEnded = (tonumber(s.endAt) ~= nil) or (tostring(s.status or ""):lower() == "ended")
+                    local localInst    = dstList[pos]
+                    local localEnded   = (tonumber(localInst.endAt) ~= nil) or (tostring(localInst.status or ""):lower() == "ended")
+                    local incomingEnded= (tonumber(s.endAt)       ~= nil) or (tostring(s.status       or ""):lower() == "ended")
                     -- sticky: nie cofaj ended -> started
                     if localEnded and not incomingEnded then
                         -- nic
                     else
-                        if dstList[pos] ~= s then
-                            dstList[pos] = s
-                            changed = true
-                        end
+                        dstList[pos] = s
+                        changed = true
                     end
                 else
                     table.insert(dstList, s)
                     idx[key] = #dstList
                     changed = true
                 end
-
             end
         end
         return changed
     end
 
     local function removePresets(dst, names)
-        if type(dst) ~= "table" or type(names) ~= "table" then
-            return false
-        end
+        if type(dst) ~= "table" or type(names) ~= "table" then return false end
         local changed = false
+        local revs = RaidTrackDB._presetRevisions or {}
         for _, name in ipairs(names) do
             if dst[name] ~= nil then
                 dst[name] = nil
+                revs[name] = nil -- usuń rewizję po stronie lokalnej
                 changed = true
             end
         end
+        RaidTrackDB._presetRevisions = revs
         return changed
     end
 
     local function removeInstances(dstList, ids)
-        if type(dstList) ~= "table" or type(ids) ~= "table" then
-            return false
-        end
+        if type(dstList) ~= "table" or type(ids) ~= "table" then return false end
         local set = {}
-        for _, id in ipairs(ids) do
-            set[tostring(id)] = true
-        end
+        for _, id in ipairs(ids) do set[tostring(id)] = true end
         local changed = false
         for i = #dstList, 1, -1 do
             local it = dstList[i]
@@ -349,39 +307,37 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
     end
 
     local function findInstanceLocal(id)
-        if not id then
-            return nil
-        end
+        if not id then return nil end
         for _, r in ipairs(RaidTrackDB.raidInstances or {}) do
-            if tostring(r.id) == tostring(id) then
-                return r
-            end
+            if tostring(r.id) == tostring(id) then return r end
         end
         return nil
     end
 
     local function isEnded(inst)
-        if not inst then
-            return false
-        end
-        if tonumber(inst.endAt) then
-            return true
-        end
+        if not inst then return false end
+        if tonumber(inst.endAt) then return true end
         return tostring(inst.status or ""):lower() == "ended"
     end
 
     -- === init bazy ===
-    RaidTrackDB.raidPresets = RaidTrackDB.raidPresets or {}
-    RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
+    RaidTrackDB.raidPresets         = RaidTrackDB.raidPresets         or {}
+    RaidTrackDB._presetRevisions    = RaidTrackDB._presetRevisions    or {}
+    RaidTrackDB._presetTombstones   = RaidTrackDB._presetTombstones   or {}
+    RaidTrackDB.raidInstances       = RaidTrackDB.raidInstances       or {}
+    RaidTrackDB._instanceTombstones = RaidTrackDB._instanceTombstones or {}
 
-    local srcPresets = (type(data.presets) == "table") and data.presets or {}
-    local srcInstances = (type(data.instances) == "table") and data.instances or {}
-    local removedPres = (type(data.removedPresets) == "table") and data.removedPresets or {}
-    local removedInst = (type(data.removedInstances) == "table") and data.removedInstances or {}
+    local srcPresets     = (type(data.presets)          == "table") and data.presets          or {}
+    local srcRevisions   = (type(data.presetRevisions)  == "table") and data.presetRevisions  or {}
+    local srcInstances   = (type(data.instances)        == "table") and data.instances        or {}
+    local removedPres    = (type(data.removedPresets)   == "table") and data.removedPresets   or {}
+    local removedInst    = (type(data.removedInstances) == "table") and data.removedInstances or {}
+
     -- 🔒 Odrzuć wszystko, co lokalnie jest skasowane (świeży tombstone)
     for name in pairs(srcPresets) do
         if _isTombstonedPreset(name) then
-            srcPresets[name] = nil
+            srcPresets[name]   = nil
+            srcRevisions[name] = nil
         end
     end
     for i = #srcInstances, 1, -1 do
@@ -399,13 +355,20 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
         return
     end
 
-    -- === jawne kasowania ===
+    -- === merge + kasowania ===
+    local changed = false
+
+    -- kasowania najpierw (żeby później nie „odrodzić” przez upsert)
     if #removedPres > 0 then
         changed = removePresets(RaidTrackDB.raidPresets, removedPres) or changed
     end
     if #removedInst > 0 then
         changed = removeInstances(RaidTrackDB.raidInstances, removedInst) or changed
     end
+
+    -- upsert wg rewizji / sticky-ended
+    changed = upsertPresetsWithRevisions(RaidTrackDB.raidPresets, srcPresets, srcRevisions) or changed
+    changed = upsertInstances(RaidTrackDB.raidInstances, srcInstances)                       or changed
 
     -- === aktywny raid tylko dla osób w raidzie i gdy instancja nie jest zakończona ===
     if data.activeID and not IsInRaid() then
@@ -415,18 +378,13 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
     if instForActive and isEnded(instForActive) then
         data.activeID, data.activePreset = nil, nil
     end
-
-    -- === merge ===
-    local changed = false
-    changed = upsertPresets(RaidTrackDB.raidPresets, srcPresets) or changed
-    changed = upsertInstances(RaidTrackDB.raidInstances, srcInstances) or changed
     -- 🔒 Nie aktywuj raidu, który lokalnie jest oznaczony do usunięcia
     if data.activeID and _isTombstonedInstance(data.activeID) then
         data.activeID, data.activePreset = nil, nil
     end
 
     if data.activeID then
-        RaidTrack.activeRaidID = data.activeID
+        RaidTrack.activeRaidID   = data.activeID
         RaidTrackDB.activeRaidID = data.activeID
 
         local cfg = nil
@@ -442,9 +400,9 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
         RaidTrack.currentRaidConfig = cfg or nil
 
         if RaidTrack.AddDebugMessage then
-            RaidTrack.AddDebugMessage(("[RaidSync] applied from %s: activeID=%s preset=%s cfg=%s"):format(tostring(
-                sender or "?"), tostring(data.activeID), tostring(data.activePreset), RaidTrack.currentRaidConfig and
-                "OK" or "nil"))
+            RaidTrack.AddDebugMessage(("[RaidSync] applied from %s: activeID=%s preset=%s cfg=%s")
+                :format(tostring(sender or "?"), tostring(data.activeID), tostring(data.activePreset),
+                        RaidTrack.currentRaidConfig and "OK" or "nil"))
         end
     end
 
@@ -453,21 +411,15 @@ function RaidTrack.ApplyRaidSyncData(data, sender)
         pcall(RaidTrack.ReconcileActiveRaidDCGuard)
     end
 
-    -- UI
     -- UI (throttle'owane)
     if RaidTrack.RequestUIRefresh then
         RaidTrack.RequestUIRefresh("RaidSync.Apply")
     else
-        -- fallback gdyby helpera nie było
-        if RaidTrack.RefreshRaidDropdown then
-            pcall(RaidTrack.RefreshRaidDropdown)
-        end
-        if RaidTrack.UpdateRaidTabStatus then
-            pcall(RaidTrack.UpdateRaidTabStatus)
-        end
+        if RaidTrack.RefreshRaidDropdown then pcall(RaidTrack.RefreshRaidDropdown) end
+        if RaidTrack.UpdateRaidTabStatus then pcall(RaidTrack.UpdateRaidTabStatus) end
     end
 
-    -- UWAGA: brak rebroadcastu z Apply (eliminuje echo/ping-pong)
+    -- brak rebroadcastu z Apply (eliminuje echo)
     return changed and true or false
 end
 
@@ -476,9 +428,7 @@ end
 -----------------------------------------------------
 -- Rejestr odbiornika RTsync (obsługa NEW i LEGACY headera, bufor per msgId/sender)
 RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
-    if type(msg) ~= "string" or msg:sub(1, 8) ~= "RTCHUNK^" then
-        return
-    end
+    if type(msg) ~= "string" or msg:sub(1, 8) ~= "RTCHUNK^" then return end
 
     local msgId, idx, total, chunk
 
@@ -491,7 +441,7 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
             local d = c and msg:find("^", c + 1, true) or nil
             if a and b and c and d then
                 msgId = msg:sub(a + 1, b - 1)
-                idx = tonumber(msg:sub(b + 1, c - 1))
+                idx   = tonumber(msg:sub(b + 1, c - 1))
                 total = tonumber(msg:sub(c + 1, d - 1))
                 chunk = msg:sub(d + 1)
             end
@@ -505,14 +455,12 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
         local c = b and msg:find("^", b + 1, true) or nil
         if a and b and c then
             msgId = nil
-            idx = tonumber(msg:sub(a + 1, b - 1))
+            idx   = tonumber(msg:sub(a + 1, b - 1))
             total = tonumber(msg:sub(b + 1, c - 1))
             chunk = msg:sub(c + 1)
         end
     end
-    if not (idx and total and chunk) then
-        return
-    end
+    if not (idx and total and chunk) then return end
 
     -- Bufor: NEW -> per msgId, LEGACY -> per sender
     RaidTrack._chunkBuffers = RaidTrack._chunkBuffers or {}
@@ -521,11 +469,7 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
     buf[idx] = chunk
     RaidTrack._chunkBuffers[key] = buf
 
-    for i = 1, total do
-        if not buf[i] then
-            return
-        end
-    end
+    for i = 1, total do if not buf[i] then return end end
 
     local full = table.concat(buf, "")
     RaidTrack._chunkBuffers[key] = nil
@@ -550,18 +494,13 @@ RaidTrack.RegisterChunkHandler(SYNC_PREFIX, function(sender, msg)
     end
 
     -- Throttle'owany refresh UI
-    if RaidTrack.RequestUIRefresh then
-        RaidTrack.RequestUIRefresh("RTSYNC-Recv")
-    end
+    if RaidTrack.RequestUIRefresh then RaidTrack.RequestUIRefresh("RTSYNC-Recv") end
 end)
 
 -----------------------------------------------------
--- Legacy compatibility shim (was in your file)
--- Ensure no duplicate logic diverges.
+-- Legacy compatibility shim
 -----------------------------------------------------
-
 function RaidTrack.MergeRaidSyncData(data, sender)
-    -- wsteczna kompatybilność nazwy
     if RaidTrack.ApplyRaidSyncData then
         RaidTrack.ApplyRaidSyncData(data, sender)
     end
