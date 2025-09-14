@@ -214,6 +214,7 @@ if RaidTrack.RegisterSlash then
             RaidTrack.PrintSlashHelp()
             return
         end
+        -- Pozostaw otwieranie okna pod /raidtrack i /rt
         RaidTrack:ToggleMainWindow()
     end, "Open/close main window (use '/raidtrack help' for all commands)")
 else
@@ -228,16 +229,22 @@ else
             end
             return
         elseif msg:match("^cleardb%s+allplayers$") or msg:match("^cleardb%s+all$") then
-            if not RaidTrack.PlayerIsOfficer or not RaidTrack.PlayerIsOfficer() then
+            -- Przekieruj na wspólny handler global-wipe
+            if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
                 print("|cffff0000RaidTrack:|r Only officers can perform a global DB wipe.")
                 return
             end
-            RaidTrack.PerformGlobalDBWipe()
+            if RaidTrack.DoGlobalWipeAllPlayers then
+                RaidTrack.DoGlobalWipeAllPlayers("slash")
+            elseif RaidTrack.GlobalWipeAllPlayers then
+                RaidTrack.GlobalWipeAllPlayers()
+            else
+                print("|cffff0000RaidTrack:|r Wipe function not found. Make sure the wipe helpers were loaded.")
+            end
             return
         end
         RaidTrack:ToggleMainWindow()
     end
-
 end
 
 -- ===== Global Wipe slash-commands =====

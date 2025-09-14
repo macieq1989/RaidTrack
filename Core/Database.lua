@@ -1,97 +1,123 @@
 -- Core/Database.lua
-local addonName, RaidTrack = ...
-RaidTrack = RaidTrack or {}
+local addonName, ns = ...
+-- Ujednolicenie przestrzeni nazw
+_G.RaidTrack   = _G.RaidTrack or ns or {}
+local RaidTrack = _G.RaidTrack
 
--- Default database setup
-RaidTrackDB = RaidTrackDB or {}
-RaidTrackDB.settings = RaidTrackDB.settings or {}
-RaidTrackDB.epgp = RaidTrackDB.epgp or {}
-RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
-RaidTrackDB.epgpLog = RaidTrackDB.epgpLog or { changes = {}, lastId = 0 }
-RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
+_G.RaidTrackDB = _G.RaidTrackDB or {}
+local RaidTrackDB = _G.RaidTrackDB
+
+-- ====== Domyślne struktury (nie dotykamy _meta / wipeId!) ======
+RaidTrackDB.settings       = RaidTrackDB.settings       or {}
+RaidTrackDB.epgp           = RaidTrackDB.epgp           or {}
+RaidTrackDB.lootHistory    = RaidTrackDB.lootHistory    or {}
+RaidTrackDB.epgpLog        = RaidTrackDB.epgpLog        or { changes = {}, lastId = 0 }
+RaidTrackDB.syncStates     = RaidTrackDB.syncStates     or {}
 RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
-RaidTrackDB.settings.minSyncRank = RaidTrackDB.settings.minSyncRank or 1
 
--- Default minimum UI tab access rank (Access Control)
+-- Domyślny próg rangi do synchronizacji, jeśli brak
+if RaidTrackDB.settings.minSyncRank == nil then
+    RaidTrackDB.settings.minSyncRank = 1
+end
+
+-- Domyślny dostęp do zakładek UI (Access Control)
 if type(RaidTrackDB.settings.minUITabRankIndex) ~= "number"
    or RaidTrackDB.settings.minUITabRankIndex < 1 then
     RaidTrackDB.settings.minUITabRankIndex = GuildControlGetNumRanks() or 10
 end
 
+-- Ustawienia minimapy
 RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {
     hide = false,
-    minimapPos = 220, -- default minimap position angle
+    minimapPos = 220,
 }
-RaidTrackDB.epgpWipeID = RaidTrackDB.epgpWipeID or tostring(time()..math.random(10000,99999))
 
-
-
-
-
-
-
--- Initialize DB on ADDON_LOADED
+-- ====== Inicjalizacja po załadowaniu dodatku ======
 local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("ADDON_LOADED")
 initFrame:SetScript("OnEvent", function(self, event, name)
     if name ~= addonName then return end
 
-    RaidTrackDB.settings = RaidTrackDB.settings or {}
-    RaidTrackDB.epgp = RaidTrackDB.epgp or {}
-    RaidTrackDB.lootHistory = RaidTrackDB.lootHistory or {}
-    RaidTrackDB.epgpLog = RaidTrackDB.epgpLog or { changes = {}, lastId = 0 }
-    RaidTrackDB.syncStates = RaidTrackDB.syncStates or {}
+    -- Upewnij się, że podstawowe tabele istnieją
+    RaidTrackDB.settings       = RaidTrackDB.settings       or {}
+    RaidTrackDB.epgp           = RaidTrackDB.epgp           or {}
+    RaidTrackDB.lootHistory    = RaidTrackDB.lootHistory    or {}
+    RaidTrackDB.epgpLog        = RaidTrackDB.epgpLog        or { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates     = RaidTrackDB.syncStates     or {}
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
-    RaidTrackDB.lastPayloads = RaidTrackDB.lastPayloads or {}
+    RaidTrackDB.lastPayloads   = RaidTrackDB.lastPayloads   or {}
+
+    -- 1) Migracja/ustalenie wipeId (korzysta z _meta i legacy-pól)
+    if RaidTrack.EnsureWipeId then
+        RaidTrack.EnsureWipeId()
+    end
+    -- 2) Zaktualizuj lustro legacy (epgpWipeID) PO EnsureWipeId, nigdy wcześniej
+    if RaidTrack.GetWipeId then
+        RaidTrackDB.epgpWipeID = tostring(RaidTrack.GetWipeId())
+    end
 
     -- Przywrócenie aktywnego raidu po restarcie/reloadzie
--- Odtworzenie activeRaidID z SavedVariables
-if RaidTrackDB and RaidTrackDB.activeRaidID then
-    RaidTrack.activeRaidID = RaidTrackDB.activeRaidID
-
-    -- Debug
-    RaidTrack.AddDebugMessage("Odtworzono activeRaidID = " .. tostring(RaidTrack.activeRaidID))
-
-    -- Opóźniona aktualizacja labela w UI (żeby mieć pewność że UI już istnieje)
-    C_Timer.After(1, function()
-        if RaidTrack.UpdateRaidTabStatus then
-            RaidTrack.UpdateRaidTabStatus()
+    if RaidTrackDB and RaidTrackDB.activeRaidID then
+        RaidTrack.activeRaidID = RaidTrackDB.activeRaidID
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage("Odtworzono activeRaidID = " .. tostring(RaidTrack.activeRaidID))
         end
-    end)
-end
+        C_Timer.After(1, function()
+            if RaidTrack.UpdateRaidTabStatus then
+                RaidTrack.UpdateRaidTabStatus()
+            end
+        end)
+    end
 
+    -- Domyślny minSyncRank jeśli nadal brak
     if RaidTrackDB.settings.minSyncRank == nil then
         RaidTrackDB.settings.minSyncRank = 1
-        RaidTrack.AddDebugMessage("Default minSyncRank set to 1")
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage("Default minSyncRank set to 1")
+        end
     end
-        if RaidTrack.IsOfficer() then
+
+    -- Auto-broadcast ustawień (oficer)
+    if RaidTrack.IsOfficer and RaidTrack.IsOfficer() then
         C_Timer.After(2, function()
-            RaidTrack.BroadcastSettings()
-            RaidTrack.AddDebugMessage("Auto-broadcasted settings on login (officer)")
+            if RaidTrack.BroadcastSettings then
+                RaidTrack.BroadcastSettings()
+            end
+            if RaidTrack.AddDebugMessage then
+                RaidTrack.AddDebugMessage("Auto-broadcasted settings on login (officer)")
+            end
         end)
     end
 
     self:UnregisterEvent("ADDON_LOADED")
 end)
 
--- Clear DB helper
+-- ====== Czyścik DB (nie kasuje _meta.wipeId) ======
 function RaidTrack.ClearRaidTrackDB()
-    if RaidTrackDB then wipe(RaidTrackDB) end
-    RaidTrackDB = {
-        settings = {},
-        epgp = {},
-        lootHistory = {},
-        epgpLog = { changes = {}, lastId = 0 },
-        syncStates = {},
-        lootSyncStates = {},
-        lastPayloads = {}
-    }
-    RaidTrack.AddDebugMessage("Database cleared; reload UI.")
+    local metaBackup = RaidTrackDB and RaidTrackDB._meta
+
+    RaidTrackDB.settings       = {}
+    RaidTrackDB.epgp           = {}
+    RaidTrackDB.lootHistory    = {}
+    RaidTrackDB.epgpLog        = { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates     = {}
+    RaidTrackDB.lootSyncStates = {}
+    RaidTrackDB.lastPayloads   = {}
+
+    RaidTrackDB._meta = metaBackup or {}
+    if RaidTrack.EnsureWipeId then RaidTrack.EnsureWipeId() end
+
+    if RaidTrack.GetWipeId then
+        RaidTrackDB.epgpWipeID = tostring(RaidTrack.GetWipeId())
+    end
+
+    if RaidTrack.AddDebugMessage then
+        RaidTrack.AddDebugMessage("Database cleared (local). _meta.wipeId preserved = " ..
+            tostring(RaidTrackDB._meta and RaidTrackDB._meta.wipeId))
+    end
 end
 
-
-
-
+-- ====== Proste logowanie raidu (bez zmian) ======
 function RaidTrack.RegisterRaid()
     RaidTrackDB.raidHistory = RaidTrackDB.raidHistory or {}
 
@@ -110,5 +136,7 @@ function RaidTrack.RegisterRaid()
         RaidTrack.RefreshRaidTab()
     end
 
-    RaidTrack.AddDebugMessage("Raid registered: " .. tostring(#players) .. " players.")
+    if RaidTrack.AddDebugMessage then
+        RaidTrack.AddDebugMessage("Raid registered: " .. tostring(#players) .. " players.")
+    end
 end
