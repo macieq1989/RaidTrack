@@ -17,25 +17,40 @@ function RaidTrack.SafeDeserialize(str)
     return true, payload
 end
 
+
+
+
 -- define once (idempotent)
 if not RaidTrack._AddDebugMessageCore then
     local function _maxLogLines()
         RaidTrackDB.settings = RaidTrackDB.settings or {}
+        -- domyślnie 1000, można zmienić w /rtlogsize
         return tonumber(RaidTrackDB.settings.debugMaxLines) or 1000
     end
+
     function RaidTrack._AddDebugMessageCore(msg, opts)
         if msg == nil then return end
         opts = opts or {}
         RaidTrackDB.settings = RaidTrackDB.settings or {}
         local toChat = (RaidTrackDB.settings.debugToChat == true) or (opts.forceEcho == true)
+
         RaidTrack.debugMessages = RaidTrack.debugMessages or {}
         local line = date("%H:%M:%S") .. " - " .. tostring(msg)
         table.insert(RaidTrack.debugMessages, 1, line)
+
         local cap = _maxLogLines()
-        while #RaidTrack.debugMessages > cap do table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages) end
-        if toChat then print("|cff00ffff[RaidTrack]|r " .. tostring(msg)) end
+        while #RaidTrack.debugMessages > cap do
+            table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages)
+        end
+
+        if toChat then
+            print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
+        end
     end
 end
+
+
+-- public alias (can be wrapped later by UI)
 RaidTrack.AddDebugMessage = RaidTrack._AddDebugMessageCore
 
 -- Officer check (cache + fallback)
@@ -95,7 +110,7 @@ function RaidTrack._UpdateOfficerCache()
 end
 
 if not RaidTrack._guildEvtFrame then
-    local f = CreateFrame("Frame", nil, UIParent)
+    local f = CreateFrame("Frame", nil, UIParent)  -- albo po prostu CreateFrame("Frame")
     f:RegisterEvent("PLAYER_LOGIN")
     f:RegisterEvent("PLAYER_GUILD_UPDATE")
     f:RegisterEvent("GUILD_ROSTER_UPDATE")
@@ -441,19 +456,21 @@ end
 -- ===== Hard global wipe: allplayers =====
 function RaidTrack.DoGlobalWipeAllPlayers(reason)
     reason = tostring(reason or "season reset")
+
     if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
         RaidTrack.AddDebugMessage("Only officer can perform /rtcleardb allplayers")
         return
     end
 
-    -- 1) podbij lokalny wipeId
+    -- 1) licznik +1 (nie reset!)
     RaidTrack.EnsureWipeId()
     local before = RaidTrack.GetWipeId()
     if not RaidTrack.IncrementWipeId("allplayers-wipe") then return end
     local after = RaidTrack.GetWipeId()
 
-    -- 2) CZYSZCZENIE ABSOLUTNIE WSZYSTKIEGO (poza settings)
-    RaidTrackDB.epgp, RaidTrackDB.lootHistory = {}, {}
+    -- 2) wyzeruj dane, nie tykaj _meta
+    RaidTrackDB.epgp = {}
+    RaidTrackDB.lootHistory = {}
     RaidTrackDB.epgpLog = { changes = {}, lastId = 0 }
     RaidTrackDB.syncStates, RaidTrackDB.lootSyncStates = {}, {}
     RaidTrackDB.raidHistory, RaidTrackDB.raidInstances = {}, {}
@@ -461,25 +478,15 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
     -- lustro legacy
     RaidTrackDB.epgpWipeID = tostring(after)
 
+    -- legacy mirror
+    RaidTrackDB.epgpWipeID = tostring(after)
+
     -- 3) odśwież UI
     if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
     if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
-    if RaidTrack.UpdateRaidTabStatus then RaidTrack.UpdateRaidTabStatus() end
 
-    -- 4) ogłoś WIPE (CFG) — BEZ REQ_SYNC
-    local announce = {
-        wipe       = true,
-        hard       = true,
-        epgpWipeID = after,
-        reason     = reason,
-        settings   = {
-            minSyncRank       = RaidTrackDB.settings.minSyncRank,
-            officerOnly       = RaidTrackDB.settings.officerOnly,
-            autoSync          = RaidTrackDB.settings.autoSync,
-            minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex,
-            minAddonVersion   = (RaidTrack.MIN_PEER_VERSION or RaidTrack.VERSION or "0.0.0"),
-        },
-    }
+    -- 4) ogłoś wipe (CFG), ale NIE proś o REQ_SYNC (to my jesteśmy źródłem prawdy)
+    local announce = { wipe = true, epgpWipeID = after, reason = reason }
     local msg = RaidTrack.SafeSerialize(announce)
     local PREFIX = (type(SYNC_PREFIX) == "string" and SYNC_PREFIX) or "RaidTrackSync"
     C_ChatInfo.SendAddonMessage(PREFIX, "CFG|" .. msg, "GUILD")
@@ -487,7 +494,7 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
     RaidTrack.AddDebugMessage("Global wipe done (allplayers). wipeId: " .. tostring(before) .. " -> " .. tostring(after) .. "; reason=" .. tostring(reason))
 end
 
--- opcjonalny helper
+-- Poproś WSZYSTKICH online o FULL (REQ_SYNC|0|0) – bez dotykania Sync.lua
 function RaidTrack.RequestFullSyncForDbVersion()
     if not IsInGuild() then return end
     local SYNC_PREFIX = "RaidTrackSync"
@@ -499,5 +506,7 @@ function RaidTrack.RequestFullSyncForDbVersion()
             C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQ_SYNC|0|0", "WHISPER", name)
         end
     end
-    if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("Forced FULL sync request sent to online guild members.") end
+    if RaidTrack.AddDebugMessage then
+        RaidTrack.AddDebugMessage("Forced FULL sync request sent to online guild members.")
+    end
 end

@@ -7,19 +7,15 @@ local RaidTrack = _G.RaidTrack
 _G.RaidTrackDB = _G.RaidTrackDB or {}
 local RaidTrackDB = _G.RaidTrackDB
 
--- ====== Domyślne struktury (NIE dotykamy _meta / wipeId!) ======
-RaidTrackDB.settings        = RaidTrackDB.settings        or {}
-RaidTrackDB.epgp            = RaidTrackDB.epgp            or {}
-RaidTrackDB.lootHistory     = RaidTrackDB.lootHistory     or {}
-RaidTrackDB.epgpLog         = RaidTrackDB.epgpLog         or { changes = {}, lastId = 0 }
-RaidTrackDB.syncStates      = RaidTrackDB.syncStates      or {}
-RaidTrackDB.lootSyncStates  = RaidTrackDB.lootSyncStates  or {}
-RaidTrackDB.lastPayloads    = RaidTrackDB.lastPayloads    or {}
-RaidTrackDB.raidHistory     = RaidTrackDB.raidHistory     or {}
-RaidTrackDB.raidInstances   = RaidTrackDB.raidInstances   or {}
-RaidTrackDB.windowPositions = RaidTrackDB.windowPositions or {}
+-- ====== Domyślne struktury (nie dotykamy _meta / wipeId!) ======
+RaidTrackDB.settings       = RaidTrackDB.settings       or {}
+RaidTrackDB.epgp           = RaidTrackDB.epgp           or {}
+RaidTrackDB.lootHistory    = RaidTrackDB.lootHistory    or {}
+RaidTrackDB.epgpLog        = RaidTrackDB.epgpLog        or { changes = {}, lastId = 0 }
+RaidTrackDB.syncStates     = RaidTrackDB.syncStates     or {}
+RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
 
--- Domyślny próg rangi do synchronizacji (0-based z WoWa; 1 = officer domyślnie)
+-- Domyślny próg rangi do synchronizacji, jeśli brak
 if RaidTrackDB.settings.minSyncRank == nil then
     RaidTrackDB.settings.minSyncRank = 1
 end
@@ -36,35 +32,32 @@ RaidTrackDB.settings.minimap = RaidTrackDB.settings.minimap or {
     minimapPos = 220,
 }
 
--- ====== Init po załadowaniu dodatku ======
+-- ====== Inicjalizacja po załadowaniu dodatku ======
 local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("ADDON_LOADED")
 initFrame:SetScript("OnEvent", function(self, event, name)
     if name ~= addonName then return end
 
     -- Upewnij się, że podstawowe tabele istnieją
-    RaidTrackDB.settings        = RaidTrackDB.settings        or {}
-    RaidTrackDB.epgp            = RaidTrackDB.epgp            or {}
-    RaidTrackDB.lootHistory     = RaidTrackDB.lootHistory     or {}
-    RaidTrackDB.epgpLog         = RaidTrackDB.epgpLog         or { changes = {}, lastId = 0 }
-    RaidTrackDB.syncStates      = RaidTrackDB.syncStates      or {}
-    RaidTrackDB.lootSyncStates  = RaidTrackDB.lootSyncStates  or {}
-    RaidTrackDB.lastPayloads    = RaidTrackDB.lastPayloads    or {}
-    RaidTrackDB.raidHistory     = RaidTrackDB.raidHistory     or {}
-    RaidTrackDB.raidInstances   = RaidTrackDB.raidInstances   or {}
-    RaidTrackDB.windowPositions = RaidTrackDB.windowPositions or {}
+    RaidTrackDB.settings       = RaidTrackDB.settings       or {}
+    RaidTrackDB.epgp           = RaidTrackDB.epgp           or {}
+    RaidTrackDB.lootHistory    = RaidTrackDB.lootHistory    or {}
+    RaidTrackDB.epgpLog        = RaidTrackDB.epgpLog        or { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates     = RaidTrackDB.syncStates     or {}
+    RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
+    RaidTrackDB.lastPayloads   = RaidTrackDB.lastPayloads   or {}
 
-    -- 1) WipeId z WipeId.lua (migracja i sanity)
+    -- 1) Migracja/ustalenie wipeId (korzysta z _meta i legacy-pól)
     if RaidTrack.EnsureWipeId then
         RaidTrack.EnsureWipeId()
     end
-    -- 2) Zaktualizuj lustro legacy (epgpWipeID) PO EnsureWipeId
+    -- 2) Zaktualizuj lustro legacy (epgpWipeID) PO EnsureWipeId, nigdy wcześniej
     if RaidTrack.GetWipeId then
         RaidTrackDB.epgpWipeID = tostring(RaidTrack.GetWipeId())
     end
 
-    -- Przywrócenie aktywnego raidu po restarcie/reloadzie (jeśli było zapisane)
-    if RaidTrackDB.activeRaidID then
+    -- Przywrócenie aktywnego raidu po restarcie/reloadzie
+    if RaidTrackDB and RaidTrackDB.activeRaidID then
         RaidTrack.activeRaidID = RaidTrackDB.activeRaidID
         if RaidTrack.AddDebugMessage then
             RaidTrack.AddDebugMessage("Odtworzono activeRaidID = " .. tostring(RaidTrack.activeRaidID))
@@ -99,47 +92,28 @@ initFrame:SetScript("OnEvent", function(self, event, name)
     self:UnregisterEvent("ADDON_LOADED")
 end)
 
--- ====== Local clear (nie kasuje _meta.wipeId, NIE wysyła CFG) ======
--- Domyślnie zachowuje settings (żeby „tylko cfg nowe wysyłało” przy global wipe).
--- Możesz wymusić pełen wipe ustawień podając opts.resetSettings = true.
-function RaidTrack.ClearRaidTrackDB(opts)
-    opts = opts or {}
-
+-- ====== Czyścik DB (nie kasuje _meta.wipeId) ======
+function RaidTrack.ClearRaidTrackDB()
     local metaBackup = RaidTrackDB and RaidTrackDB._meta
-    local settingsBackup = (opts.resetSettings and {}) or (RaidTrackDB.settings or {})
 
-    -- wyczyść wszystkie dane runtime
-    RaidTrackDB.epgp            = {}
-    RaidTrackDB.lootHistory     = {}
-    RaidTrackDB.epgpLog         = { changes = {}, lastId = 0 }
-    RaidTrackDB.syncStates      = {}
-    RaidTrackDB.lootSyncStates  = {}
-    RaidTrackDB.lastPayloads    = {}
-    RaidTrackDB.raidHistory     = {}
-    RaidTrackDB.raidInstances   = {}
-    RaidTrackDB.activeRaidID    = nil
+    RaidTrackDB.settings       = {}
+    RaidTrackDB.epgp           = {}
+    RaidTrackDB.lootHistory    = {}
+    RaidTrackDB.epgpLog        = { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates     = {}
+    RaidTrackDB.lootSyncStates = {}
+    RaidTrackDB.lastPayloads   = {}
 
-    -- zachowaj ustawienia (lub zresetuj jeśli wymuszone)
-    RaidTrackDB.settings        = settingsBackup
-
-    -- przywróć meta + wipeId
     RaidTrackDB._meta = metaBackup or {}
     if RaidTrack.EnsureWipeId then RaidTrack.EnsureWipeId() end
+
     if RaidTrack.GetWipeId then
         RaidTrackDB.epgpWipeID = tostring(RaidTrack.GetWipeId())
     end
 
-    -- odśwież UI
-    if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
-    if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
-    if RaidTrack.UpdateRaidTabStatus then RaidTrack.UpdateRaidTabStatus() end
-
     if RaidTrack.AddDebugMessage then
-        RaidTrack.AddDebugMessage(
-            "Database cleared (local). _meta.wipeId preserved = " ..
-            tostring(RaidTrackDB._meta and RaidTrackDB._meta.wipeId) ..
-            (opts.resetSettings and "; settings reset" or "; settings preserved")
-        )
+        RaidTrack.AddDebugMessage("Database cleared (local). _meta.wipeId preserved = " ..
+            tostring(RaidTrackDB._meta and RaidTrackDB._meta.wipeId))
     end
 end
 
