@@ -48,7 +48,9 @@ end
 local function SetSelectedRange(data, fromIdx, toIdx)
     local s, e = math.min(fromIdx, toIdx), math.max(fromIdx, toIdx)
     for i = s, e do
-        guildTabData.selected[data[i].name] = true
+        if data[i] and data[i].name then
+            guildTabData.selected[data[i].name] = true
+        end
     end
 end
 
@@ -71,17 +73,17 @@ function RaidTrack.UpdateGuildRoster()
         local name, _, _, _, classLocalized, _, _, _, online = GetGuildRosterInfo(i)
         if name and classLocalized then
             local shortName = Ambiguate(name, "none")
-            local classToken = RaidTrack.GetClassTokenFromLocalized(classLocalized)
-            local epgp = RaidTrackDB.epgp[shortName] or { ep = 0, gp = 0 }
+            local classToken = RaidTrack.GetClassTokenFromLocalized and RaidTrack.GetClassTokenFromLocalized(classLocalized) or classLocalized
+            local epgp = RaidTrackDB and RaidTrackDB.epgp and RaidTrackDB.epgp[shortName] or { ep = 0, gp = 0 }
             local lowerName = shortName:lower()
-            local lowerClass = classToken:lower()
+            local lowerClass = (classToken and classToken:lower()) or ""
             if (online or showOffline) and (filter == "" or lowerName:find(filter, 1, true) or lowerClass:find(filter, 1, true)) then
-                local pr = (epgp.gp > 0 and epgp.ep / epgp.gp or 0)
+                local pr = (epgp.gp and epgp.gp > 0) and (epgp.ep / epgp.gp) or 0
                 table.insert(data, {
                     name = shortName,
                     class = classToken,
-                    ep = epgp.ep,
-                    gp = epgp.gp,
+                    ep = epgp.ep or 0,
+                    gp = epgp.gp or 0,
                     pr = pr,
                     online = online
                 })
@@ -89,7 +91,7 @@ function RaidTrack.UpdateGuildRoster()
         end
     end
 
-    table.sort(data, function(a, b) return a.pr > b.pr end)
+    table.sort(data, function(a, b) return (a.pr or 0) > (b.pr or 0) end)
     guildTabData.currentData = data
     guildTabData.rowPoolSize = 75
     ClearSelection()
@@ -127,7 +129,7 @@ function RaidTrack.RenderGuildRows()
     header:SetLayout("Flow")
     header:SetFullWidth(true)
     header:SetHeight(24)
-    for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}, {"RT", 44}}) do
+    for _, h in ipairs({{"C", 20}, {"Name", 140}, {"EP", 60}, {"GP", 60}, {"PR", 60}, {"RT", 44}, {"DB", 60}}) do
         local lbl = AceGUI:Create("Label")
         lbl:SetText(h[1])
         lbl:SetWidth(h[2])
@@ -139,13 +141,14 @@ function RaidTrack.RenderGuildRows()
 
     for i = 1, math.min(guildTabData.rowPoolSize, #guildTabData.currentData) do
         local d = guildTabData.currentData[i]
-        local row = AceGUI:Create("SimpleGroup")
+        if not d then break end
 
+        local row = AceGUI:Create("SimpleGroup")
         row:SetLayout("Flow")
         row:SetFullWidth(true)
         row:SetHeight(24)
 
-        -- highlight wybranych
+        -- highlight wybranych (jeśli masz ApplyHighlight)
         if RaidTrack.ApplyHighlight then
             RaidTrack.ApplyHighlight(row, IsSelected(d.name))
         end
@@ -158,31 +161,44 @@ function RaidTrack.RenderGuildRows()
         icon.image:SetTexCoord(GetClassIconTextureCoords(d.class))
         row:AddChild(icon)
 
-        local col = RAID_CLASS_COLORS[d.class] or { r = 1, g = 1, b = 1 }
+        local col = (RAID_CLASS_COLORS and RAID_CLASS_COLORS[d.class]) or { r = 1, g = 1, b = 1 }
         if not d.online then
             col = { r = col.r * 0.5, g = col.g * 0.5, b = col.b * 0.5 }
         end
 
-        
-       -- pobierz wersję klienta (zielony/żółty/niebieski numer; "old" pomarańczowe; "-" czerwone)
-local verText, verColor = "-", { r = 0.70, g = 0.70, b = 0.70 }
-if RaidTrack.GetClientVersionStatus then
-    verText, verColor = RaidTrack.GetClientVersionStatus(d.name)
-end
+        -- pobierz wersję klienta (RT)
+        local verText, verColor = "-", { r = 0.70, g = 0.70, b = 0.70 }
+        if RaidTrack.GetClientVersionStatus then
+            local a,b = RaidTrack.GetClientVersionStatus(d.name)
+            if a then verText = a end
+            if b then verColor = b end
+        end
 
--- Jeżeli online i wciąż "-", spróbuj delikatnie odpalić sondę (throttle w środku)
-if verText == "-" and d.online and RaidTrack.ProbeClientVersion then
-    RaidTrack.ProbeClientVersion(d.name)
-end
+        if verText == "-" and d.online and RaidTrack.ProbeClientVersion then
+            -- ProbeClientVersion powinno samo throttle'ować wywołania
+            RaidTrack.ProbeClientVersion(d.name)
+        end
 
-local fields = {
-    { text = d.name,                       width = 140 },
-    { text = d.ep,                         width = 60  },
-    { text = d.gp,                         width = 60  },
-    { text = string.format("%.2f", d.pr),  width = 60  },
-    { text = verText,                      width = 44,  overrideColor = verColor },
-}
+        -- pobierz wipeID (DB)
+        local wipeText, wipeColor = "-", { r = 0.70, g = 0.70, b = 0.70 }
+        if RaidTrack.GetClientWipeStatus then
+            local a,b = RaidTrack.GetClientWipeStatus(d.name)
+            if a then wipeText = a end
+            if b then wipeColor = b end
+        end
 
+        if wipeText == "-" and d.online and RaidTrack.ProbeClientWipe then
+            RaidTrack.ProbeClientWipe(d.name)
+        end
+
+        local fields = {
+            { text = d.name,                       width = 140 },
+            { text = d.ep,                         width = 60  },
+            { text = d.gp,                         width = 60  },
+            { text = string.format("%.2f", d.pr),  width = 60  },
+            { text = verText,                      width = 44,  overrideColor = verColor },
+            { text = wipeText,                     width = 60,  overrideColor = wipeColor },
+        }
 
         for _, field in ipairs(fields) do
             local lbl = AceGUI:Create("Label")
@@ -193,6 +209,8 @@ local fields = {
             local useCol = field.overrideColor or col
             if lbl.SetColor then
                 lbl:SetColor(useCol.r, useCol.g, useCol.b)
+            elseif lbl.SetTextColor then
+                lbl:SetTextColor(useCol.r, useCol.g, useCol.b)
             end
             row:AddChild(lbl)
         end
@@ -300,14 +318,22 @@ function RaidTrack:Render_guildTab(container)
     end)
     rightPanel:AddChild(searchBox)
 
-    -- Ręczny rescan wersji
+    -- Ręczny rescan wersji / wipeID
     local rescanBtn = AceGUI:Create("Button")
     rescanBtn:SetText("Rescan versions")
     rescanBtn:SetFullWidth(true)
     rescanBtn:SetCallback("OnClick", function()
-        if RaidTrack.SendMyVersion then RaidTrack.SendMyVersion() end
-        if RaidTrack.RequestVersionSweep then RaidTrack.RequestVersionSweep() end
-    end)
+    if RaidTrack.SendMyVersion       then RaidTrack.SendMyVersion()       end
+    if RaidTrack.RequestVersionSweep then RaidTrack.RequestVersionSweep() end
+    if RaidTrack.SendMyDbVersion     then RaidTrack.SendMyDbVersion()     end
+    if RaidTrack.RequestDbSweep      then RaidTrack.RequestDbSweep()      end
+
+    -- DODAJ: wymuś FULL, żeby złapać legacy epgpWipeID
+    if RaidTrack.RequestFullSyncForDbVersion then
+        RaidTrack.RequestFullSyncForDbVersion()
+    end
+end)
+
     rightPanel:AddChild(rescanBtn)
 
     local epInput = AceGUI:Create("EditBox")
@@ -342,6 +368,13 @@ function RaidTrack:Render_guildTab(container)
     if RaidTrack.RequestVersionSweep then
         C_Timer.After(0.6, RaidTrack.RequestVersionSweep)
     end
+    -- i analogicznie dla wipe/db, jeśli masz te funkcje
+    if RaidTrack.SendMyDbVersion then
+        C_Timer.After(0.2, RaidTrack.SendMyDbVersion)
+    end
+    if RaidTrack.RequestDbSweep then
+        C_Timer.After(0.8, RaidTrack.RequestDbSweep)
+    end
 end
 
 RaidTrack.UpdateGuildList = function()
@@ -368,7 +401,7 @@ function RaidTrack.DeactivateGuildTab()
     GameTooltip:Hide()
 end
 
--- Pozwala Core/Version.lua odświeżyć tabelę po odebraniu VER
+-- Pozwala Core/Version.lua odświeżyć tabelę po odebraniu VER/DB
 function RaidTrack.RefreshGuildTab()
     if guildTabData and guildTabData.scrollFrame then
         RaidTrack.UpdateGuildRoster()

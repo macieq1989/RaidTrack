@@ -7,102 +7,61 @@ local AceSerializer = LibStub:GetLibrary("AceSerializer-3.0")
 assert(AceSerializer, "AceSerializer-3.0 not found!")
 
 -- Serialization
-function RaidTrack.SafeSerialize(tbl)
-    return AceSerializer:Serialize(tbl)
-end
+function RaidTrack.SafeSerialize(tbl) return AceSerializer:Serialize(tbl) end
 function RaidTrack.SafeDeserialize(str)
-    -- Logowanie przed deserializacją
-    
-
     local ok, payload = AceSerializer:Deserialize(str)
-
-    -- Logowanie w przypadku błędu deserializacji
     if not ok then
         RaidTrack.AddDebugMessage("Deserialize failed: " .. tostring(payload))
         return false, nil
     end
-
-    
-
     return true, payload
 end
 
-
-
 -- define once (idempotent)
 if not RaidTrack._AddDebugMessageCore then
+    local function _maxLogLines()
+        RaidTrackDB.settings = RaidTrackDB.settings or {}
+        return tonumber(RaidTrackDB.settings.debugMaxLines) or 1000
+    end
     function RaidTrack._AddDebugMessageCore(msg, opts)
         if msg == nil then return end
         opts = opts or {}
-
         RaidTrackDB.settings = RaidTrackDB.settings or {}
         local toChat = (RaidTrackDB.settings.debugToChat == true) or (opts.forceEcho == true)
-
-        -- 1) always store to in‑addon log buffer
         RaidTrack.debugMessages = RaidTrack.debugMessages or {}
         local line = date("%H:%M:%S") .. " - " .. tostring(msg)
         table.insert(RaidTrack.debugMessages, 1, line)
-        if #RaidTrack.debugMessages > 200 then
-            table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages)
-        end
-
-        -- 2) optional echo to chat
-        if toChat then
-            print("|cff00ffff[RaidTrack]|r " .. tostring(msg))
-        end
+        local cap = _maxLogLines()
+        while #RaidTrack.debugMessages > cap do table.remove(RaidTrack.debugMessages, #RaidTrack.debugMessages) end
+        if toChat then print("|cff00ffff[RaidTrack]|r " .. tostring(msg)) end
     end
 end
-
--- public alias (can be wrapped later by UI)
 RaidTrack.AddDebugMessage = RaidTrack._AddDebugMessageCore
 
-
--- Returns true if player guild rankIndex <= minSyncRank (default 1 = officer)
+-- Officer check (cache + fallback)
 function RaidTrack.IsOfficer()
-    if not IsInGuild() then
-        return false
-    end
-
+    if not IsInGuild() then return false end
     RaidTrack._officerCache = RaidTrack._officerCache or { verdict = false, ts = 0 }
     local now = (GetTime and GetTime()) or time()
-
-    -- 1) Szybka ścieżka: jeśli klient/serwer mówi, że masz uprawnienia oficerskie, ufamy temu
     if C_GuildInfo and C_GuildInfo.CanEditOfficerNote and C_GuildInfo.CanEditOfficerNote() then
         RaidTrack._officerCache.verdict = true
         RaidTrack._officerCache.ts = now
         return true
     end
-
-    -- 2) Cache: przez 10s używamy ostatniego wyniku, żeby unikać zwracania false zanim roster dojedzie
     if (now - (RaidTrack._officerCache.ts or 0)) < 10 then
         return RaidTrack._officerCache.verdict and true or false
     end
-
-    -- 3) Ścisłe porównanie pełnej nazwy (Nick-Realm)
     local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
-    if myFull == "" then
-        return false
-    end
-
+    if myFull == "" then return false end
     local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
-    -- upewnij się, że roster jest świeży
-    if C_GuildInfo and C_GuildInfo.GuildRoster then
-        C_GuildInfo.GuildRoster()
-    end
-
+    if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
     local n = GetNumGuildMembers() or 0
     if n == 0 then
-        -- roster jeszcze nie gotowy: spróbuj odświeżyć za chwilę i zwróć ostatni znany wynik
         if C_Timer and C_Timer.After then
-            C_Timer.After(1, function()
-                if C_GuildInfo and C_GuildInfo.GuildRoster then
-                    C_GuildInfo.GuildRoster()
-                end
-            end)
+            C_Timer.After(1, function() if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end end)
         end
         return RaidTrack._officerCache.verdict and true or false
     end
-
     for i = 1, n do
         local name, _, rankIndex = GetGuildRosterInfo(i)
         if name == myFull then
@@ -112,202 +71,113 @@ function RaidTrack.IsOfficer()
             return verdict
         end
     end
-
-    -- nie znaleziono jeszcze siebie w rosterze: zachowaj ostrożność,
-    -- ale też zapamiętaj timestamp, żeby nie pętlić się co klatkę
     RaidTrack._officerCache.verdict = false
     RaidTrack._officerCache.ts = now
     return false
 end
 
-
-
--- ===== Guild roster / officer cache (no name normalization) =====
+-- dodatkowy cache eventowy (bez zmian funkcjonalnych)
 RaidTrack._officerCache = RaidTrack._officerCache or { ready = false, isOfficer = false, lastCheck = 0 }
-
 function RaidTrack._UpdateOfficerCache()
-    if not IsInGuild() then
-        RaidTrack._officerCache.ready = true
-        RaidTrack._officerCache.isOfficer = false
-        return
-    end
-
-    if C_GuildInfo and C_GuildInfo.GuildRoster then
-        C_GuildInfo.GuildRoster()
-    end
-
+    if not IsInGuild() then RaidTrack._officerCache.ready = true; RaidTrack._officerCache.isOfficer = false; return end
+    if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
     local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
-    if myFull == "" then
-        RaidTrack._officerCache.ready = false
-        RaidTrack._officerCache.isOfficer = false
-        return
-    end
-
+    if myFull == "" then RaidTrack._officerCache.ready = false; RaidTrack._officerCache.isOfficer = false; return end
     local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
-
     local found, isOfficer = false, false
     local n = GetNumGuildMembers() or 0
     for i = 1, n do
         local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name == myFull then
-            found = true
-            isOfficer = (tonumber(rankIndex) or 99) <= minRank
-            break
-        end
+        if name == myFull then found = true; isOfficer = (tonumber(rankIndex) or 99) <= minRank; break end
     end
-
-    -- ready == znaleźliśmy bieżącego gracza w rosterze
     RaidTrack._officerCache.ready = found
     RaidTrack._officerCache.isOfficer = isOfficer
 end
 
-
 if not RaidTrack._guildEvtFrame then
-    local f = CreateFrame("Frame", nil, parent)
+    local f = CreateFrame("Frame", nil, UIParent)
     f:RegisterEvent("PLAYER_LOGIN")
     f:RegisterEvent("PLAYER_GUILD_UPDATE")
     f:RegisterEvent("GUILD_ROSTER_UPDATE")
     f:SetScript("OnEvent", function(_, evt)
         if evt == "PLAYER_LOGIN" or evt == "PLAYER_GUILD_UPDATE" then
-            if C_GuildInfo and C_GuildInfo.GuildRoster then
-                C_GuildInfo.GuildRoster()
-            end
+            if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
         end
-        if RaidTrack._UpdateOfficerCache then
-            RaidTrack._UpdateOfficerCache()
-        end
+        if RaidTrack._UpdateOfficerCache then RaidTrack._UpdateOfficerCache() end
     end)
     RaidTrack._guildEvtFrame = f
 end
--- ===== end guild roster / officer cache =====
 
--- Status helper
+-- Status helpers
 function RaidTrack.GetSyncStatus()
     local count = RaidTrack.lastDeltaCount or 0
-    if count == 0 then
-        return "Idle"
-    else
-        return string.format("Pending (%d events)", count)
-    end
+    return (count == 0) and "Idle" or string.format("Pending (%d events)", count)
 end
-
 function RaidTrack.GetSyncTimeAgo()
-    if not RaidTrack.lastSyncTime then
-        return "never"
-    end
+    if not RaidTrack.lastSyncTime then return "never" end
     local elapsed = time() - RaidTrack.lastSyncTime
     local min = math.floor(elapsed / 60)
     local sec = elapsed % 60
     return string.format("%d min %d sec ago", min, sec)
 end
 function RaidTrack.DebugTableToString(tbl)
-    if type(tbl) ~= "table" then
-        return tostring(tbl)
-    end
+    if type(tbl) ~= "table" then return tostring(tbl) end
     local str = ""
-    for k, v in pairs(tbl) do
-        str = str .. tostring(k) .. "=" .. tostring(v) .. "; "
-    end
+    for k, v in pairs(tbl) do str = str .. tostring(k) .. "=" .. tostring(v) .. "; " end
     return str
 end
 
+-- EPGP helpers (twoje bez zmian)
 function RaidTrack.AddLootToLog(player, itemID, gp)
-    -- Dodajemy przedmiot do logu lootu
-    local lootEntry = {
-        player = player,
-        itemID = itemID,
-        gp = gp,
-        timestamp = time() -- Dodajemy znacznik czasu
-    }
+    local lootEntry = { player = player, itemID = itemID, gp = gp, timestamp = time() }
     table.insert(RaidTrackDB.lootHistory, lootEntry)
     RaidTrack.AddDebugMessage("Loot added for " .. player .. ": ItemID " .. itemID .. " with GP " .. gp)
 end
-
 function RaidTrack.AssignPointsToPlayer(player, gp)
-    -- Przypisanie punktów GP dla gracza
-    local epgp = RaidTrackDB.epgp[player] or {
-        ep = 0,
-        gp = 0
-    }
-    epgp.gp = epgp.gp + gp -- Dodajemy GP
+    local epgp = RaidTrackDB.epgp[player] or { ep = 0, gp = 0 }
+    epgp.gp = epgp.gp + gp
     RaidTrackDB.epgp[player] = epgp
     RaidTrack.AddDebugMessage("Assigned " .. gp .. " GP to player " .. player)
 end
 function RaidTrack.GetSelectedItemID()
-    -- Zakładając, że masz dostęp do UI przedmiotów
-    -- Pobieramy obecnie wybrany przedmiot z UI
-    local selectedItem = RaidTrack.auctionParticipantWindow.selectedItem -- Zmienna z wybranym przedmiotem w UI
-
-    if selectedItem then
-        return selectedItem.itemID -- Zwracamy itemID wybranego przedmiotu
-    else
-        return nil -- Jeśli nie ma wybranego przedmiotu
-    end
+    local selectedItem = RaidTrack.auctionParticipantWindow and RaidTrack.auctionParticipantWindow.selectedItem
+    return selectedItem and selectedItem.itemID or nil
 end
 function RaidTrack.GetEPGP(player)
-    -- Zakładam, że posiadasz bazę danych EPGP i chcesz zwrócić EP, GP oraz PR
-    -- Pobierz dane z bazy EPGP lub z innej lokalnej struktury danych
-
-    -- Przykład:
-    local playerEP, playerGP = 0, 0 -- Inicjalizacja domyślnych wartości EP i GP
-    local playerPR = 0 -- Inicjalizacja PR (Priority Rating)
-
-    -- Znajdź dane dla gracza w bazie danych
+    local playerEP, playerGP = 0, 0
     if RaidTrackDB.epgp[player] then
         playerEP = RaidTrackDB.epgp[player].ep or 0
         playerGP = RaidTrackDB.epgp[player].gp or 0
-        playerPR = playerGP > 0 and playerEP / playerGP or 0
-
     end
-
-    -- Zwracamy dane
+    local playerPR = (playerGP > 0) and (playerEP / playerGP) or 0
     return playerEP, playerGP, playerPR
 end
+
 function RaidTrack.SendAuctionResponseChunked(auctionID, itemID, choice)
     local from = UnitName("player")
-
-    local payload = {
-        auctionID = tostring(auctionID), -- ważne!
-        itemID = tonumber(itemID),
-        choice = choice,
-        from = from
-    }
-
+    local payload = { auctionID = tostring(auctionID), itemID = tonumber(itemID), choice = choice, from = from }
     RaidTrack.QueueAuctionChunkedSend(nil, payload.auctionID, "response", payload)
-
-    -- Zawsze lokalnie przetwarzaj własną odpowiedź
     RaidTrack.AddDebugMessage("Locally handling own response for " .. from)
-    C_Timer.After(0.05, function()
-        RaidTrack.HandleAuctionResponse(payload.auctionID, payload)
-    end)
+    C_Timer.After(0.05, function() RaidTrack.HandleAuctionResponse(payload.auctionID, payload) end)
 end
 
 function RaidTrack.IsLeader()
     local playerName = UnitName("player")
     local leaderName = RaidTrack.auction and RaidTrack.auction.leader
-
-    print("[RaidTrack] UnitName:", playerName)
-    print("[RaidTrack] Auction Leader:", leaderName)
-
     return leaderName == playerName
 end
 
 function RaidTrack.IsPlayerInMyGuild(name)
     for i = 1, GetNumGuildMembers() do
         local fullName = GetGuildRosterInfo(i)
-        if fullName and strsplit("-", fullName) == name then
-            return true
-        end
+        if fullName and strsplit("-", fullName) == name then return true end
     end
     return false
 end
-
 function RaidTrack.IsPlayerInMyRaid(name)
     for i = 1, GetNumGroupMembers() do
         local raidName = GetRaidRosterInfo(i)
-        if raidName and strsplit("-", raidName) == name then
-            return true
-        end
+        if raidName and strsplit("-", raidName) == name then return true end
     end
     return false
 end
@@ -316,25 +186,19 @@ function RaidTrack.FindItemInBags(itemID)
     for bag = 0, NUM_BAG_SLOTS do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
             local id = C_Container.GetContainerItemID(bag, slot)
-            if id == itemID then
-                return bag, slot
-            end
+            if id == itemID then return bag, slot end
         end
     end
     return nil, nil
 end
 
 function RaidTrack.ApplyHighlight(row, isSelected)
-    if not row or not row.frame then
-        return
-    end
-
+    if not row or not row.frame then return end
     if not row._highlightTexture then
         local tex = row.frame:CreateTexture(nil, "BACKGROUND")
         tex:SetAllPoints()
         row._highlightTexture = tex
     end
-
     if isSelected then
         row._highlightTexture:SetColorTexture(0.1, 0.1, 0.3, 0.4)
         row._highlightTexture:Show()
@@ -343,167 +207,64 @@ function RaidTrack.ApplyHighlight(row, isSelected)
         row._highlightTexture:Hide()
     end
 end
+
 function RaidTrack.GetClassTokenFromLocalized(classLocalized)
-    for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do
-        if localized == classLocalized then
-            return token
-        end
-    end
-    for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do
-        if localized == classLocalized then
-            return token
-        end
-    end
+    for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do if localized == classLocalized then return token end end
+    for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do if localized == classLocalized then return token end end
     return classLocalized
 end
 
--- Tworzy popup frame (raz na start)
+-- Toasty (bez zmian merytorycznych)
 local function CreateEPGPToastFrame()
     local frame = CreateFrame("Frame", "RaidTrackEPGPToast", UIParent)
-
     frame:SetPoint("TOP", UIParent, "TOP", 0, -200)
     frame:SetSize(300, 60)
-
-    frame.bgTex = frame:CreateTexture(nil, "BACKGROUND")
-    frame.bgTex:SetAllPoints()
-    frame.bgTex:SetColorTexture(0, 0.4, 0, 0.6)
-
-    frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    frame.text:SetPoint("CENTER")
-    frame.text:SetText("")
-
-    frame:SetScript("OnShow", function(self)
-        C_Timer.After(4, function()
-            self:Hide()
-        end)
-    end)
-
+    frame.bgTex = frame:CreateTexture(nil, "BACKGROUND"); frame.bgTex:SetAllPoints(); frame.bgTex:SetColorTexture(0, 0.4, 0, 0.6)
+    frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge"); frame.text:SetPoint("CENTER"); frame.text:SetText("")
+    frame:SetScript("OnShow", function(self) C_Timer.After(4, function() self:Hide() end) end)
     return frame
 end
 
--- Główna funkcja wywołująca popup
 function RaidTrack:ShowEPGPToast(amount, playerName, type)
     if not amount or not playerName or not type then return end
-
-    local icon
-    local color
+    local color = "|cffffffff"
+    if type == "EP" then color = (amount >= 0) and "|cff00ff00" or "|cffff0000"
+    elseif type == "GP" then color = (amount >= 0) and "|cffffcc00" or "|cffff0000" end
     local prefix = (amount >= 0) and "+" or ""
-
-    if type == "EP" then
-        icon = "Interface\\Icons\\INV_Misc_Coin_01"
-        color = (amount >= 0) and "|cff00ff00" or "|cffff0000"
-    elseif type == "GP" then
-        icon = "Interface\\Icons\\INV_Misc_Coin_01"
-        color = (amount >= 0) and "|cffffcc00" or "|cffff0000"
-    else
-        icon = "Interface\\Icons\\INV_Misc_QuestionMark"
-        color = "|cffffffff"
-    end
-
-    -- Zbuduj tekst toastu
     local text = string.format("%s%s %s -> %s|r", color, type, prefix .. amount, playerName)
-
-
-    -- Pokaż alert frame
     local frame = RaidTrack.epgpAlertFrame or CreateFrame("Frame", nil, UIParent)
     RaidTrack.epgpAlertFrame = frame
-
-    frame:SetSize(300, 64)
-    frame:SetPoint("TOP", UIParent, "TOP", 0, -200)
-    frame:Show()
-
-    if not frame.bg then
-        frame.bg = frame:CreateTexture(nil, "BACKGROUND")
-        frame.bg:SetAllPoints()
-        frame.bg:SetColorTexture(0, 0, 0, 0.8)
-    end
-
-    if not frame.icon then
-        frame.icon = frame:CreateTexture(nil, "ARTWORK")
-        frame.icon:SetSize(40, 40)
-        frame.icon:SetPoint("LEFT", frame, "LEFT", 10, 0)
-    end
-
-    if not frame.text then
-        frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-        frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0)
-        frame.text:SetJustifyH("LEFT")
-        frame.text:SetWidth(240)
-        frame.text:SetHeight(40)
-    end
-
-    frame.icon:SetTexture(icon)
+    frame:SetSize(300, 64); frame:SetPoint("TOP", UIParent, "TOP", 0, -200); frame:Show()
+    if not frame.bg then frame.bg = frame:CreateTexture(nil, "BACKGROUND"); frame.bg:SetAllPoints(); frame.bg:SetColorTexture(0,0,0,0.8) end
+    if not frame.icon then frame.icon = frame:CreateTexture(nil, "ARTWORK"); frame.icon:SetSize(40,40); frame.icon:SetPoint("LEFT", frame, "LEFT", 10, 0) end
+    if not frame.text then frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge"); frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0); frame.text:SetJustifyH("LEFT"); frame.text:SetWidth(240); frame.text:SetHeight(40) end
+    frame.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
     frame.text:SetText(text)
-
     frame:SetAlpha(1)
-    C_Timer.After(5, function()
-        if frame:IsShown() then
-            UIFrameFadeOut(frame, 2, 1, 0)
-        end
-    end)
+    C_Timer.After(5, function() if frame:IsShown() then UIFrameFadeOut(frame, 2, 1, 0) end end)
 end
-
 
 function RaidTrack:ShowItemAwardToast(itemID, gpAmount)
     if not itemID or not gpAmount then return end
-
-    local playerName = UnitName("player")
     local itemName, itemLink, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
-    if not itemLink then
-        C_Timer.After(0.5, function()
-            RaidTrack:ShowItemAwardToast(itemID, gpAmount)
-        end)
-        return
-    end
-
+    if not itemLink then C_Timer.After(0.5, function() RaidTrack:ShowItemAwardToast(itemID, gpAmount) end); return end
     local text = string.format("Awarded %s for %d GP", itemLink, gpAmount)
-
     local frame = RaidTrack.awardToastFrame or CreateFrame("Frame", nil, UIParent)
     RaidTrack.awardToastFrame = frame
-
-    frame:SetSize(320, 64)
-    frame:SetPoint("TOP", UIParent, "TOP", 0, -260)
-    frame:Show()
-
-    if not frame.bg then
-        frame.bg = frame:CreateTexture(nil, "BACKGROUND")
-        frame.bg:SetAllPoints()
-        frame.bg:SetColorTexture(0, 0, 0, 0.8)
-    end
-
-    if not frame.icon then
-        frame.icon = frame:CreateTexture(nil, "ARTWORK")
-        frame.icon:SetSize(40, 40)
-        frame.icon:SetPoint("LEFT", frame, "LEFT", 10, 0)
-    end
-
-    if not frame.text then
-        frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-        frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0)
-        frame.text:SetJustifyH("LEFT")
-        frame.text:SetWidth(250)
-        frame.text:SetHeight(40)
-    end
-
+    frame:SetSize(320, 64); frame:SetPoint("TOP", UIParent, "TOP", 0, -260); frame:Show()
+    if not frame.bg then frame.bg = frame:CreateTexture(nil, "BACKGROUND"); frame.bg:SetAllPoints(); frame.bg:SetColorTexture(0,0,0,0.8) end
+    if not frame.icon then frame.icon = frame:CreateTexture(nil, "ARTWORK"); frame.icon:SetSize(40,40); frame.icon:SetPoint("LEFT", frame, "LEFT", 10, 0) end
+    if not frame.text then frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge"); frame.text:SetPoint("LEFT", frame.icon, "RIGHT", 10, 0); frame.text:SetJustifyH("LEFT"); frame.text:SetWidth(250); frame.text:SetHeight(40) end
     frame.icon:SetTexture(itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
     frame.text:SetText(text)
-
     frame:SetAlpha(1)
-    C_Timer.After(5, function()
-        if frame:IsShown() then
-            UIFrameFadeOut(frame, 2, 1, 0)
-        end
-    end)
+    C_Timer.After(5, function() if frame:IsShown() then UIFrameFadeOut(frame, 2, 1, 0) end end)
 end
-
-
 
 function RaidTrack.FindExpansionForInstance(instanceID)
     for _, exp in ipairs(RaidTrack.OfflineRaidData or {}) do
         for _, inst in ipairs(exp.instances or {}) do
-            if inst.id == instanceID then
-                return exp.expansionID
-            end
+            if inst.id == instanceID then return exp.expansionID end
         end
     end
     return nil
@@ -512,25 +273,14 @@ end
 function RaidTrack:LoadActiveRaid()
     RaidTrackDB.raidInstances = RaidTrackDB.raidInstances or {}
     for _, raid in ipairs(RaidTrackDB.raidInstances) do
-        if raid.status == "started" then
-            RaidTrack.activeRaidID = raid.id
-            break
-        end
+        if raid.status == "started" then RaidTrack.activeRaidID = raid.id break end
     end
 end
 function RaidTrack.SaveWindowPosition(name, frame)
-    if not RaidTrackDB.windowPositions then
-        RaidTrackDB.windowPositions = {}
-    end
+    RaidTrackDB.windowPositions = RaidTrackDB.windowPositions or {}
     local point, _, relativePoint, xOfs, yOfs = frame.frame:GetPoint()
-    RaidTrackDB.windowPositions[name] = {
-        point = point,
-        relativePoint = relativePoint,
-        x = xOfs,
-        y = yOfs
-    }
+    RaidTrackDB.windowPositions[name] = { point = point, relativePoint = relativePoint, x = xOfs, y = yOfs }
 end
-
 function RaidTrack.RestoreWindowPosition(name, frame)
     if RaidTrackDB.windowPositions and RaidTrackDB.windowPositions[name] then
         local pos = RaidTrackDB.windowPositions[name]
@@ -541,29 +291,24 @@ function RaidTrack.RestoreWindowPosition(name, frame)
     end
 end
 
--- ==== Guild rank helpers (UI gating) ====
+-- UI gating
 function RaidTrack.GetGuildRanks()
     local values, order = {}, {}
     if IsInGuild() then
         local num = GuildControlGetNumRanks() or 10
         for i = 1, num do
             local name = GuildControlGetRankName(i) or ("Rank "..i)
-            values[i] = string.format("%s (%d)", name, i-1) -- label pokazuje 0-based
+            values[i] = string.format("%s (%d)", name, i-1)
             table.insert(order, i)
         end
     end
     return values, order
 end
-
--- 1-based indeks rangi gracza (GM = 1); jak brak gildii -> duża liczba
 function RaidTrack.GetPlayerGuildRankIndex1()
-    local rankIndex0 = select(3, GetGuildInfo("player")) -- 0-based
-
+    local rankIndex0 = select(3, GetGuildInfo("player"))
     if rankIndex0 ~= nil then return (rankIndex0 + 1) end
     return 999
 end
-
--- odczyt wymaganego progu rangi z settings (domyślnie najniższa = brak ograniczeń)
 function RaidTrack.GetMinUITabRank()
     RaidTrackDB.settings = RaidTrackDB.settings or {}
     local num = GuildControlGetNumRanks() or 10
@@ -571,69 +316,52 @@ function RaidTrack.GetMinUITabRank()
     if type(v) ~= "number" or v < 1 then v = num end
     return v
 end
-
--- czy gracz spełnia wymagania rangi
 function RaidTrack.IsPlayerAllowedByRank()
     return RaidTrack.GetPlayerGuildRankIndex1() <= RaidTrack.GetMinUITabRank()
 end
 
-
-
--- === RaidTrack Helpers (append) ===
-
-function RaidTrack.IsRaidLeadOrAssist()
-    return UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")
-end
-
-function RaidTrack.IsRaidLeader()
-    return UnitIsGroupLeader("player")
-end
-
+-- Raid helpers
+function RaidTrack.IsRaidLeadOrAssist() return UnitIsGroupLeader("player") or UnitIsGroupAssistant("player") end
+function RaidTrack.IsRaidLeader() return UnitIsGroupLeader("player") end
 function RaidTrack.GetActiveRaidEntry()
     if not RaidTrackDB or not RaidTrack.activeRaidID then return nil end
     for _, r in ipairs(RaidTrackDB.raidHistory or {}) do
-        if tostring(r.id) == tostring(RaidTrack.activeRaidID) then
-            return r
-        end
+        if tostring(r.id) == tostring(RaidTrack.activeRaidID) then return r end
     end
     return nil
 end
-
 function RaidTrack.GetActiveRaidConfig()
     local raid = RaidTrack.GetActiveRaidEntry()
     return raid and raid.settings or nil
 end
-
 function RaidTrack.MarkRaidFlag(flagKey)
     local raid = RaidTrack.GetActiveRaidEntry()
     if not raid then return end
     raid.flags = raid.flags or {}
     raid.flags[flagKey] = true
 end
-
 function RaidTrack.WasRaidFlagged(flagKey)
     local raid = RaidTrack.GetActiveRaidEntry()
     if not raid or not raid.flags then return false end
     return raid.flags[flagKey] == true
 end
--- === EP helpers ===
+
+-- EP helpers
 function RaidTrack.AwardEPToCurrentRaidMembers(amount, reason)
     amount = tonumber(amount) or 0
     if amount <= 0 then return end
     for i = 1, GetNumGroupMembers() do
         local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-        if name and online then
-            RaidTrack.LogEPGPChange(name, amount, 0, reason or "EP")
-        end
+        if name and online then RaidTrack.LogEPGPChange(name, amount, 0, reason or "EP") end
     end
 end
 
+-- /rtdebug
 SLASH_RTDEBUG1 = "/rtdebug"
 SlashCmdList["RTDEBUG"] = function(msg)
     RaidTrackDB = RaidTrackDB or {}
     RaidTrackDB.settings = RaidTrackDB.settings or {}
     msg = tostring(msg or ""):lower():gsub("%s+", "")
-
     if msg == "on" or msg == "1" or msg == "true" then
         RaidTrackDB.settings.debugToChat = true
         print("|cff00ffff[RaidTrack]|r Debug echo to chat: |cff00ff00ON|r")
@@ -646,273 +374,130 @@ SlashCmdList["RTDEBUG"] = function(msg)
     end
 end
 
--- ==== Slash Help Registry & Auto-Discovery ==================================
-
+-- ==== Slash Help Registry (jak było) ====
 RaidTrack.Slash = RaidTrack.Slash or { descr = {}, order = {}, byTag = {} }
-
--- (Opcjonalnie) ustaw opis dla TAGu (np. "RAIDTRACK", "RTDEBUG")
-function RaidTrack.SetSlashDescription(tag, text)
-    RaidTrack.Slash.descr[tag] = tostring(text or "")
-end
-
--- Pomocnicze: zarejestruj wiele aliasów dla jednego TAGu (bez zmiany tego jak działa WoW)
--- Przykład użycia zamiast ręcznego SLASH_XYZn:
---   RaidTrack.RegisterSlash({ tag="RAIDTRACK", aliases={"/raidtrack","/rt"} }, handler, "Otwiera główne okno")
+function RaidTrack.SetSlashDescription(tag, text) RaidTrack.Slash.descr[tag] = tostring(text or "") end
 function RaidTrack.RegisterSlash(opts, handler, description)
     local tag     = assert(opts and opts.tag, "RegisterSlash: missing tag")
     local aliases = assert(opts and opts.aliases, "RegisterSlash: missing aliases")
     assert(type(handler) == "function", "RegisterSlash: handler must be function")
-
     SlashCmdList[tag] = handler
-    for i, alias in ipairs(aliases) do
-        _G["SLASH_" .. tag .. i] = alias
-    end
-
-    -- opis + kolekcja do helpa
+    for i, alias in ipairs(aliases) do _G["SLASH_" .. tag .. i] = alias end
     RaidTrack.Slash.descr[tag] = description or RaidTrack.Slash.descr[tag] or ""
     RaidTrack.Slash.byTag[tag] = RaidTrack.Slash.byTag[tag] or {}
-    wipe(RaidTrack.Slash.byTag[tag])
-    for _, a in ipairs(aliases) do table.insert(RaidTrack.Slash.byTag[tag], a) end
-
-    -- zachowaj kolejność wyświetlania (pierwsze rejestracje wyżej)
-    local seen
-    for _, t in ipairs(RaidTrack.Slash.order) do if t == tag then seen = true break end end
+    wipe(RaidTrack.Slash.byTag[tag]); for _, a in ipairs(aliases) do table.insert(RaidTrack.Slash.byTag[tag], a) end
+    local seen; for _, t in ipairs(RaidTrack.Slash.order) do if t == tag then seen = true break end end
     if not seen then table.insert(RaidTrack.Slash.order, tag) end
 end
-
--- Auto‑zbieranie już istniejących komend z globali (_G): SLASH_TAG1="/cmd"
--- Filtrujemy do „naszych” przez prefiks aliasu (/rt, /raidtrack) albo znane TAGi.
 local _KNOWN_TAG_PREFIX = { "RAIDTRACK", "RT", "RTDEBUG", "RTAUCTION", "RTSYNC", "RTEPGP" }
-local function _isKnownTag(tag)
-    for _, p in ipairs(_KNOWN_TAG_PREFIX) do
-        if tag:find("^" .. p) then return true end
-    end
-    return false
-end
-
-local function _aliasLooksOurs(alias)
-    alias = alias:lower()
-    return alias:find("^/rt") or alias:find("^/raidtrack")
-end
-
--- Zbierz wszystko, co już zostało zarejestrowane klasycznym sposobem
+local function _isKnownTag(tag) for _, p in ipairs(_KNOWN_TAG_PREFIX) do if tag:find("^" .. p) then return true end end return false end
+local function _aliasLooksOurs(alias) alias = alias:lower(); return alias:find("^/rt") or alias:find("^/raidtrack") end
 function RaidTrack.CollectExistingSlash()
     local found = {}
     for k, v in pairs(_G) do
         local tag = k:match("^SLASH_([A-Z0-9_]+)1$")
         if tag and (SlashCmdList[tag] and type(SlashCmdList[tag]) == "function") and (_isKnownTag(tag) or true) then
-            -- wczytaj wszystkie aliasy tego TAGu
-            local aliases = {}
-            local i = 1
-            while true do
-                local alias = rawget(_G, ("SLASH_%s%d"):format(tag, i))
-                if not alias then break end
-                table.insert(aliases, alias)
-                i = i + 1
-            end
-
-            -- bierzemy tylko TAGi, które mają JAKIKOLWIEK alias wyglądający na nasz
-            local ours = false
-            for _, a in ipairs(aliases) do if _aliasLooksOurs(a) then ours = true break end end
-            if ours then
-                found[tag] = aliases
-            end
+            local aliases = {}; local i = 1
+            while true do local alias = rawget(_G, ("SLASH_%s%d"):format(tag, i)); if not alias then break end; table.insert(aliases, alias); i = i + 1 end
+            local ours = false; for _, a in ipairs(aliases) do if _aliasLooksOurs(a) then ours = true break end end
+            if ours then found[tag] = aliases end
         end
     end
-
-    -- Zapisz do naszego rejestru (nie zmienia handlerów)
     for tag, aliases in pairs(found) do
         RaidTrack.Slash.byTag[tag] = { unpack(aliases) }
-        local seen
-        for _, t in ipairs(RaidTrack.Slash.order) do if t == tag then seen = true break end end
+        local seen; for _, t in ipairs(RaidTrack.Slash.order) do if t == tag then seen = true break end end
         if not seen then table.insert(RaidTrack.Slash.order, tag) end
-        -- jeśli nie ma opisu, zostaw pusty – można uzupełnić SetSlashDescription(tag, "...") gdziekolwiek
         RaidTrack.Slash.descr[tag] = RaidTrack.Slash.descr[tag] or ""
     end
 end
-
--- Wypisz ładny help
 function RaidTrack.PrintSlashHelp()
-    -- upewnij się, że mamy także te porozrzucane komendy
     RaidTrack.CollectExistingSlash()
-
     print("|cff00ffff[RaidTrack]|r Available slash commands:")
-    -- porządek: wg order, a nowe (zebrane) na końcu alfabetycznie
     local known = {}
     for _, tag in ipairs(RaidTrack.Slash.order) do
         known[tag] = true
         local aliases = RaidTrack.Slash.byTag[tag] or {}
         if #aliases > 0 then
             local primary = aliases[1]
-            local extra = ""
-            if #aliases > 1 then
-                extra = "  (aliases: " .. table.concat(aliases, ", ", 2) .. ")"
-            end
+            local extra = (#aliases > 1) and ("  (aliases: " .. table.concat(aliases, ", ", 2) .. ")") or ""
             local desc = RaidTrack.Slash.descr[tag]
-            if desc and desc ~= "" then
-                print(("  %s - %s%s"):format(primary, desc, extra))
-            else
-                print(("  %s%s"):format(primary, extra))
-            end
+            if desc and desc ~= "" then print(("  %s - %s%s"):format(primary, desc, extra))
+            else print(("  %s%s"):format(primary, extra)) end
         end
     end
-
-    -- Dołóż TAGi, które nie weszły do order (gdyby jakieś doszły dynamicznie)
     local rest = {}
-    for tag, aliases in pairs(RaidTrack.Slash.byTag) do
-        if not known[tag] and #aliases > 0 then
-            table.insert(rest, tag)
-        end
-    end
+    for tag, aliases in pairs(RaidTrack.Slash.byTag) do if not known[tag] and #aliases > 0 then table.insert(rest, tag) end end
     table.sort(rest)
     for _, tag in ipairs(rest) do
         local aliases = RaidTrack.Slash.byTag[tag]
         local primary = aliases[1]
         local extra = (#aliases > 1) and ("  (aliases: " .. table.concat(aliases, ", ", 2) .. ")") or ""
         local desc = RaidTrack.Slash.descr[tag] or ""
-        if desc ~= "" then
-            print(("  %s - %s%s"):format(primary, desc, extra))
-        else
-            print(("  %s%s"):format(primary, extra))
-        end
+        if desc ~= "" then print(("  %s - %s%s"):format(primary, desc, extra)) else print(("  %s%s"):format(primary, extra)) end
     end
-
     print("Tip: /raidtrack help  — to show this list")
 end
 
--- Hard global wipe: czyści wszystko do zera i ustawia nowy epgpWipeID.
--- Wywołanie TYLKO przez officera.
+-- ===== Hard global wipe: allplayers =====
 function RaidTrack.DoGlobalWipeAllPlayers(reason)
     reason = tostring(reason or "season reset")
-    if not RaidTrack.IsOfficer or not RaidTrack.IsOfficer() then
+    if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
         RaidTrack.AddDebugMessage("Only officer can perform /rtcleardb allplayers")
         return
     end
 
-    -- 1) nowy gildiowy wipeID (spójny string)
-    local newID = (RaidTrack._GenerateGuildWipeID and RaidTrack._GenerateGuildWipeID())
-                  or (tostring(time()) .. tostring(math.random(10000,99999)))
-    RaidTrackDB.epgpWipeID = newID
+    -- 1) podbij lokalny wipeId
+    RaidTrack.EnsureWipeId()
+    local before = RaidTrack.GetWipeId()
+    if not RaidTrack.IncrementWipeId("allplayers-wipe") then return end
+    local after = RaidTrack.GetWipeId()
 
-    -- 2) zbuduj baseline: unia kluczy z obecnej bazy + roster gildii
-    local baseline = {}
-    local known = {}
-    for p in pairs(RaidTrackDB.epgp or {}) do
-        local name = Ambiguate(p, "none")
-        known[name] = true
-    end
-    if IsInGuild() then
-        for i = 1, GetNumGuildMembers() do
-            local full = GetGuildRosterInfo(i)
-            if full then
-                local name = Ambiguate(full, "none")
-                known[name] = true
-            end
-        end
-    end
-    for name in pairs(known) do
-        if name and name ~= "" then
-            baseline[name] = { ep = 0, gp = 1 } -- gp min=1 (spójne z ApplyEPGPChange)
-        end
-    end
+    -- 2) CZYSZCZENIE ABSOLUTNIE WSZYSTKIEGO (poza settings)
+    RaidTrackDB.epgp, RaidTrackDB.lootHistory = {}, {}
+    RaidTrackDB.epgpLog = { changes = {}, lastId = 0 }
+    RaidTrackDB.syncStates, RaidTrackDB.lootSyncStates = {}, {}
+    RaidTrackDB.raidHistory, RaidTrackDB.raidInstances = {}, {}
+    RaidTrackDB.lastPayloads, RaidTrackDB.activeRaidID = {}, nil
+    -- lustro legacy
+    RaidTrackDB.epgpWipeID = tostring(after)
 
-    -- 3) podmień lokalny stan na baseline (NIE na pusty)
-    RaidTrackDB.epgp        = baseline
-    RaidTrackDB.lootHistory = {}
-    RaidTrackDB.epgpLog     = { changes = {}, lastId = 0 }
-    RaidTrackDB.syncStates  = {}
-    RaidTrackDB.lootSyncStates = {}
-
+    -- 3) odśwież UI
     if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
     if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
+    if RaidTrack.UpdateRaidTabStatus then RaidTrack.UpdateRaidTabStatus() end
 
-    -- 4) ogłoś wipe do gildii (CFG: wipe=true + epgpWipeID)
-    local announce = { settings = { epgpWipeID = newID, wipe = true } }
+    -- 4) ogłoś WIPE (CFG) — BEZ REQ_SYNC
+    local announce = {
+        wipe       = true,
+        hard       = true,
+        epgpWipeID = after,
+        reason     = reason,
+        settings   = {
+            minSyncRank       = RaidTrackDB.settings.minSyncRank,
+            officerOnly       = RaidTrackDB.settings.officerOnly,
+            autoSync          = RaidTrackDB.settings.autoSync,
+            minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex,
+            minAddonVersion   = (RaidTrack.MIN_PEER_VERSION or RaidTrack.VERSION or "0.0.0"),
+        },
+    }
     local msg = RaidTrack.SafeSerialize(announce)
-    C_ChatInfo.SendAddonMessage("RaidTrackSync", "CFG|" .. msg, "GUILD")
+    local PREFIX = (type(SYNC_PREFIX) == "string" and SYNC_PREFIX) or "RaidTrackSync"
+    C_ChatInfo.SendAddonMessage(PREFIX, "CFG|" .. msg, "GUILD")
 
-    -- 5) natychmiastowy FULL baseline do online’owych (żeby pendingWipe mógł *przyjąć* snapshot)
-    if IsInGuild() then
-        local me = UnitName("player")
-        for i = 1, GetNumGuildMembers() do
-            local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
-            name = name and Ambiguate(name, "none")
-            if online and name and name ~= me then
-                -- wymuszamy tryb FULL od zera
-                RaidTrack.SendSyncDataTo(name, 0, 0)
-            end
-        end
-    end
-
-    RaidTrack.AddDebugMessage(("Global wipe announced. WipeID=%s reason=%s; baseline sent to online guild."):format(newID, reason))
+    RaidTrack.AddDebugMessage("Global wipe done (allplayers). wipeId: " .. tostring(before) .. " -> " .. tostring(after) .. "; reason=" .. tostring(reason))
 end
 
--- Uniwersalne odczytanie payloadu:
--- 1) surowy AceSerializer (^1^...), 2) LibDeflate (z markerem \001 i bez),
--- 3) LibCompress (AddonEncodeTable + Decompress), 4) jeszcze raz spróbuj sam Decompress.
-function RaidTrack.DeserializeAny(raw)
-    if type(raw) ~= "string" or raw == "" then
-        return false, nil, "not-a-string"
-    end
-
-    local s = raw
-
-    -- 0) już jest AceSerializer?
-    if s:sub(1,3) == "^1^" then
-        return RaidTrack.SafeDeserialize(s)
-    end
-
-    local LD = (LibStub and LibStub("LibDeflate", true)) or _G.LibDeflate
-    local LC = (LibStub and LibStub("LibCompress", true)) or _G.LibCompress
-
-    -- 1) LibDeflate z markerem \001
-    if LD and s:sub(1,1) == "\001" then
-        local dec = LD:DecodeForWoWAddonChannel(s:sub(2))
-        if dec then
-            local out = LD:DecompressDeflate(dec)
-            if out then s = out end
-        end
-    -- 2) LibDeflate bez markera (ktoś wysłał EncodeForWoWAddonChannel bez prefiksu)
-    elseif LD then
-        local dec = LD:DecodeForWoWAddonChannel(s)
-        if dec then
-            local out = LD:DecompressDeflate(dec)
-            if out then s = out end
+-- opcjonalny helper
+function RaidTrack.RequestFullSyncForDbVersion()
+    if not IsInGuild() then return end
+    local SYNC_PREFIX = "RaidTrackSync"
+    local me = Ambiguate(UnitName("player"), "none")
+    for i = 1, GetNumGuildMembers() do
+        local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+        name = name and Ambiguate(name, "none")
+        if online and name and name ~= me then
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQ_SYNC|0|0", "WHISPER", name)
         end
     end
-
-    -- jeśli po LD już mamy Ace, spróbuj zdeserializować
-    if s:sub(1,3) == "^1^" then
-        return RaidTrack.SafeDeserialize(s)
-    end
-
-    -- 3) LibCompress: AddonEncodeTable + Decompress (często daje nagłówki w stylu "Z:...")
-    if LC and LC.GetAddonEncodeTable then
-        local AET = LC:GetAddonEncodeTable()
-        if AET and AET.Decode then
-            local decoded = AET:Decode(s)
-            if decoded then
-                local un, err = LC:Decompress(decoded)
-                if un then s = un end
-            end
-        end
-    end
-
-    -- 4) ostatni strzał: może ktoś wysłał skompresowany binarnie bez kodowania kanałowego
-    if s:sub(1,3) ~= "^1^" and LC and LC.Decompress then
-        local un, err = LC:Decompress(s)
-        if un then s = un end
-    end
-
-    -- 5) finalnie oczekujemy AceSerializer
-    if s:sub(1,3) ~= "^1^" then
-        if RaidTrack.AddDebugMessage then
-            local head = s:gsub("[^%g%s]", function(c) return ("\\x%02X"):format(c:byte()) end):sub(1,16)
-            RaidTrack.AddDebugMessage("[DeSer] bad header after LD/LC fallbacks: " .. head)
-        end
-        return false, nil, "bad-header"
-    end
-
-    return RaidTrack.SafeDeserialize(s)
+    if RaidTrack.AddDebugMessage then RaidTrack.AddDebugMessage("Forced FULL sync request sent to online guild members.") end
 end
-

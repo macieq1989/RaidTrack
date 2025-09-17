@@ -1,4 +1,8 @@
-local addonName, RaidTrack = ...
+-- UI/RaidTab.lua
+local addonName, RT = ...
+_G.RaidTrack = _G.RaidTrack or RT or {}
+local RaidTrack = _G.RaidTrack
+
 local AceGUI = LibStub("AceGUI-3.0")
 
 local raidTabData = {
@@ -118,7 +122,7 @@ local function UpdateRaidList()
 
         local spacer = AceGUI:Create("Label"); spacer:SetText(""); spacer:SetWidth(30); header:AddChild(spacer)
         H("EP", 60); H("GP", 60); H("PR", 60)
-        H("RT", 44) -- ◀ nowa kolumna wersji
+        H("RT", 44)
 
         raidTabData.raidScrollContainer:AddChild(header)
 
@@ -127,7 +131,9 @@ local function UpdateRaidList()
             local row = AceGUI:Create("SimpleGroup")
             row:SetLayout("Flow"); row:SetFullWidth(true); row:SetHeight(22)
 
-            RaidTrack.ApplyHighlight(row, IsSelected(d.name))
+            if RaidTrack.ApplyHighlight then
+                RaidTrack.ApplyHighlight(row, IsSelected(d.name))
+            end
 
             -- Class icon
             local icon = AceGUI:Create("Icon")
@@ -173,14 +179,13 @@ local function UpdateRaidList()
             prLabel:SetText(string.format("%.2f", d.pr)); prLabel:SetFontObject(GameFontNormal)
             prLabel:SetWidth(60); prLabel:SetJustifyH("CENTER"); row:AddChild(prLabel)
 
-            -- ◀ RT version column
+            -- RT version column
             local verText, verColor = "-", { r = 0.70, g = 0.70, b = 0.70 }
             if RaidTrack.GetClientVersionStatus then
                 verText, verColor = RaidTrack.GetClientVersionStatus(d.name)
             end
-            -- aktywnie sonduj, jeśli nadal nie wiemy; raid = online
             if (verText == "-" or verText == "unknown" or verText == nil) and RaidTrack.ProbeClientVersion then
-                RaidTrack.ProbeClientVersion(d.name)
+                RaidTrack.ProbeClientVersion(Ambiguate(d.name, "none"))
             end
 
             local verLabel = AceGUI:Create("Label")
@@ -306,7 +311,15 @@ function RaidTrack:Render_raidTab(container)
 
     local configBtn = AceGUI:Create("Button")
     configBtn:SetText("Configure Raid"); configBtn:SetFullWidth(true)
-    configBtn:SetCallback("OnClick", function() RaidTrack:OpenRaidConfigWindow() end)
+    configBtn:SetCallback("OnClick", function()
+        if RaidTrack.OpenRaidConfigWindow then
+            RaidTrack:OpenRaidConfigWindow()
+        else
+            if RaidTrack.AddDebugMessage then
+                RaidTrack.AddDebugMessage("OpenRaidConfigWindow is nil (sprawdź nagłówek pliku UI/RaidConfig.lua i kolejność w .toc).")
+            end
+        end
+    end)
     controlsScroll:AddChild(configBtn)
 
     local startBtn = AceGUI:Create("Button")
@@ -336,7 +349,7 @@ function RaidTrack:Render_raidTab(container)
         RaidTrack.currentRaidConfig = presetTbl or RaidTrack.currentRaidConfig
 
         UpdateRaidList()
-        RaidTrack.BroadcastRaidSync()
+        if RaidTrack.BroadcastRaidSync then RaidTrack.BroadcastRaidSync() end
 
         if RaidTrack.activeTab == "raidTab" and not RaidTrack._raidTabTicker then
             RaidTrack._raidTabTicker = C_Timer.NewTicker(1, function()
@@ -367,7 +380,6 @@ function RaidTrack:Render_raidTab(container)
     end)
     controlsScroll:AddChild(searchBox)
 
-    -- ◀ Rescan tylko dla członków raidu
     local rescanBtn = AceGUI:Create("Button")
     rescanBtn:SetText("Rescan versions"); rescanBtn:SetFullWidth(true)
     rescanBtn:SetCallback("OnClick", function()
