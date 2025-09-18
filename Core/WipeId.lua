@@ -73,6 +73,16 @@ local function setLocal(newId, source)
     db.epgpWipeID = tostring(newId)
 end
 
+-- Czy nadawca jest kompatybilny (po handshaku)?
+local function is_compatible_peer(name)
+    name = normName(name)
+    local caps = RaidTrack and RaidTrack.peerCaps and RaidTrack.peerCaps[name]
+    if not caps then return false end
+    if not caps.ok then return false end
+    if RaidTrack.PROTOCOL and caps.proto ~= RaidTrack.PROTOCOL then return false end
+    return true
+end
+
 -- === API licznika ===
 function RaidTrack.EnsureWipeId()
     _G.RaidTrackDB = _G.RaidTrackDB or {}
@@ -110,7 +120,7 @@ function RaidTrack.IncrementWipeId(reason)
     return true
 end
 
--- Adopcja zdalnego wipeId z filtrami anty-legacy
+-- Adopcja zdalnego wipeId z filtrami anty-legacy i po handshaku
 function RaidTrack.TryAdoptRemoteWipeId(remoteWipeId, fromWho)
     remoteWipeId = clean(remoteWipeId)
     fromWho = normName(fromWho)
@@ -127,14 +137,20 @@ function RaidTrack.TryAdoptRemoteWipeId(remoteWipeId, fromWho)
         return false
     end
 
-    -- mały skok (<= +1) — akceptuj od każdego
+    -- wymuś kompatybilność nadawcy (po PONG/handshaku)
+    if not is_compatible_peer(fromWho) then
+        dbg("[Wipe] Reject adopt from " .. tostring(fromWho or "?") .. " (incompatible or unknown peer)")
+        return false
+    end
+
+    -- mały skok (<= +1) — akceptuj (już tylko od kompatybilnego)
     if remoteWipeId <= (localId + 1) then
         setLocal(remoteWipeId, "remote-small:" .. (fromWho or "unknown"))
         dbg("[Wipe] Adopted remote wipeId " .. fmtId(remoteWipeId) .. " (was " .. fmtId(localId) .. ") from " .. tostring(fromWho or "?"))
         return true
     end
 
-    -- większy skok — tylko od oficera (jeśli włączone)
+    -- większy skok — tylko od oficera (i kompatybilnego)
     if ALLOW_BIG_JUMP_FROM_OFFICER and RaidTrack.IsOfficerName(fromWho) then
         setLocal(remoteWipeId, "remote-officer:" .. (fromWho or "unknown"))
         dbg("[Wipe] Adopted officer wipeId " .. fmtId(remoteWipeId) .. " (was " .. fmtId(localId) .. ") from " .. tostring(fromWho or "?"))

@@ -12,23 +12,28 @@ function RaidTrack:CreateMainFrame()
     frame:EnableResize(false)
     self.mainFrame = frame
 
-    local tabs = {{
-        text = "Raid",
-        value = "raidTab"
-    }, {
-        text = "EPGP",
-        value = "epgpTab",
-        restricted = false
-    }, {
-        text = "Loot",
-        value = "lootTab"
-    }, {
-        text = "Guild",
-        value = "guildTab"
-    }, {
-        text = "Settings",
-        value = "settingsTab"
-    }}
+  local tabs = {{
+    text = "Raid",
+    value = "raidTab"
+}, {
+    text = "EPGP",
+    value = "epgpTab",
+    restricted = false
+}, {
+    -- NEW: EPGP Log tab
+    text = "EPGP Log",
+    value = "epgpLogTab",
+    restricted = false
+}, {
+    text = "Loot",
+    value = "lootTab"
+}, {
+    text = "Guild",
+    value = "guildTab"
+}, {
+    text = "Settings",
+    value = "settingsTab"
+}}
 
     -- Zachowaj czystą (niemutowaną przez AceGUI) kopię tabów
     RaidTrack._all_tabs_source = {}
@@ -85,24 +90,25 @@ function RaidTrack:CreateMainFrame()
     refreshBtn:SetSize(80, 22)
     refreshBtn:SetText("Refresh")
     refreshBtn:SetPoint("TOPRIGHT", frame.frame, "TOPRIGHT", -40, -30)
-    refreshBtn:SetScript("OnClick", function()
+       refreshBtn:SetScript("OnClick", function()
         local activeTab = RaidTrack.activeTab or ""
         if activeTab == "raidTab" and RaidTrack.UpdateRaidList then
             RaidTrack.UpdateRaidList()
         elseif activeTab == "epgpTab" and RaidTrack.UpdateEPGPList then
             RaidTrack.UpdateEPGPList()
+        elseif activeTab == "epgpLogTab" and RaidTrack.RefreshEPGPLogTab then  -- [NOWE]
+            RaidTrack.RefreshEPGPLogTab()
         elseif activeTab == "lootTab" and RaidTrack.UpdateLootList then
             RaidTrack.UpdateLootList()
         elseif activeTab == "guildTab" and RaidTrack.UpdateGuildList then
             RaidTrack.UpdateGuildList()
-
         elseif activeTab == "settingsTab" then
-            -- np. Settings tab nie potrzebuje refresh
+            -- np. Settings nie wymaga refresh
         else
             RaidTrack.AddDebugMessage("Refresh: no known updater for tab: " .. tostring(activeTab))
         end
-
     end)
+
 end
 
 function RaidTrack:ToggleMainWindow()

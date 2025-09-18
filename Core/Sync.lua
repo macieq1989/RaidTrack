@@ -15,8 +15,13 @@ local function GetAddonVersion()
             if v and v ~= "" then return v end
         end
     end
+
     local v = meta("Version") or meta("X-RT-Version") or meta("X-Curse-Project-Version") or ""
-    if v:find("@") or v:find("wowi:version") or v:find("project%-version") then v = "" end
+    -- odfiltruj placeholdery typu @project-version@ / wowi:version
+    if v:find("@") or v:find("wowi:version") or v:find("project%-version") then
+        v = ""
+    end
+    -- wyciągnij pierwszy semver z napisu (działa dla v3.3.2, 3.3.2-beta, 3.3, 3)
     local sem = (v:match("%d[%d%.]*") or ""):gsub("%.+$", "")
     if sem == "" then sem = "0.0.0" end
     return sem
@@ -24,13 +29,14 @@ end
 
 RaidTrack.VERSION  = GetAddonVersion()
 RaidTrack.PROTOCOL = 1
--- Opcjonalnie wymuś „update do mojej wersji”:
+-- Jeśli chcesz wymuszać update do swojej wersji:
 -- RaidTrack.MIN_PEER_VERSION = RaidTrack.VERSION
 
+-- porównanie semver (odporne na sufiksy typu "3.3.2-beta", "v3.3.2+meta")
 local function semver_cmp(a, b)
     local function parts(s)
         s = tostring(s or "")
-        s = s:match("%d[%d%.]*") or "0"
+        s = s:match("%d[%d%.]*") or "0"      -- weź pierwszy fragment typu 1.2.3
         local x,y,z = s:match("^(%d+)%.?(%d*)%.?(%d*)$")
         return tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0
     end
@@ -42,7 +48,7 @@ local function semver_cmp(a, b)
     return 0
 end
 
-RaidTrack.MIN_PEER_VERSION = RaidTrack.MIN_PEER_VERSION or "0.0.0"
+RaidTrack.MIN_PEER_VERSION = RaidTrack.MIN_PEER_VERSION or "0.0.0"  -- stała domyślna
 
 local function required_min_version()
     local dbmin = RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minAddonVersion or "0.0.0"
@@ -56,15 +62,24 @@ local function peer_meets_my_min(v)
     return semver_cmp(v or "0.0.0", required_min_version()) >= 0
 end
 
+-- wersjonowany PING
+local function send_ping(name)
+    local need = required_min_version()
+    local ping = string.format("PING|%s|%d|%s", RaidTrack.VERSION, RaidTrack.PROTOCOL, need)
+    C_ChatInfo.SendAddonMessage("RaidTrackSync", ping, "WHISPER", name)
+end
+
+-- — (opcjonalny) user messaging dla legacy (anty-spam)
 RaidTrack._notifiedLegacy = RaidTrack._notifiedLegacy or {}
 local function notifyLegacy(who, need, reason)
-    if not who or who == "" or RaidTrack._notifiedLegacy[who] then return end
+    if not who or who == "" then return end
+    if RaidTrack._notifiedLegacy[who] then return end
     RaidTrack._notifiedLegacy[who] = true
     local suffix = reason and (" ("..reason..")") or ""
     local text = ("[RaidTrack] Your addon is incompatible%s. Please update to %s+ to sync."):format(suffix, tostring(need))
     SendChatMessage(text, "WHISPER", nil, who)
 end
--- === koniec version gating ===
+-- === koniec sekcji version gating ===
 
 local CHUNK_SIZE = 200
 local SEND_DELAY = 0.25
@@ -74,12 +89,12 @@ C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
 C_ChatInfo.RegisterAddonMessagePrefix("auction")
 C_ChatInfo.RegisterAddonMessagePrefix("RTSYNC")
 
-RaidTrack.pendingSends = {}
-RaidTrack.chunkBuffer = {}
-RaidTrack.syncTimer = nil
-RaidTrack.peerCaps = RaidTrack.peerCaps or {}
-
-RaidTrack.chunkHandlers = RaidTrack.chunkHandlers or {}
+RaidTrack.pendingSends   = RaidTrack.pendingSends   or {}   -- who => {chunks=..., gotPong=..., meta={...}}
+RaidTrack.chunkBuffer    = RaidTrack.chunkBuffer    or {}   -- odbiór chunków
+RaidTrack.syncTimer      = RaidTrack.syncTimer      or nil
+RaidTrack.peerCaps       = RaidTrack.peerCaps       or {}   -- who => {ver, proto, ok}
+RaidTrack._pendingReqs   = RaidTrack._pendingReqs   or {}   -- who => {knownEP=..., knownLoot=...} (REQ_SYNC oczekujące na handshake)
+RaidTrack.chunkHandlers  = RaidTrack.chunkHandlers  or {}
 
 if not C_ChatInfo.IsAddonMessagePrefixRegistered("auction") then
     C_ChatInfo.RegisterAddonMessagePrefix("auction")
@@ -149,7 +164,7 @@ function RaidTrack.SendSyncDeltaToEligible()
         name = name and Ambiguate(name, "none")
         if online and name ~= me and rankIndex <= minRank and not sent[name] then
             sent[name] = true
-            local knownEP = RaidTrackDB.syncStates[name] or 0
+            local knownEP   = RaidTrackDB.syncStates[name] or 0
             local knownLoot = RaidTrackDB.lootSyncStates[name] or 0
             local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP)
             local lootDelta = {}
@@ -175,7 +190,8 @@ function RaidTrack.RequestSyncFromGuild()
         local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
         name = name and Ambiguate(name, "none")
         if name ~= me and online then
-            local msg = string.format("REQ_SYNC|%d|%d|%s|%d", epID, lootID, RaidTrack.VERSION, RaidTrack.PROTOCOL)
+            -- legacy-safe: REQ_SYNC|<ep>|<loot> (handshake i tak wymusimy osobno)
+            local msg = string.format("REQ_SYNC|%d|%d", epID, lootID)
             C_ChatInfo.SendAddonMessage(SYNC_PREFIX, msg, "WHISPER", name)
         end
     end
@@ -192,6 +208,20 @@ end
 function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     if not RaidTrack.IsPlayerInMyGuild(name) then return end
     RaidTrackDB.lootSyncStates = RaidTrackDB.lootSyncStates or {}
+
+    -- GATE: nie wysyłamy danych (ani wipeID) do niezweryfikowanych/za starych klientów
+    local caps = RaidTrack.peerCaps[name]
+    if not (caps and caps.ok) then
+        send_ping(name)  -- zainicjuj handshake
+        if RaidTrack.AddDebugMessage then
+            RaidTrack.AddDebugMessage("[Sync] Blocked send to " .. tostring(name) .. " (no caps/too old). Sent versioned PING.")
+        end
+        -- zapamiętaj intencję jeśli to przyszło z REQ_SYNC
+        if knownEP ~= nil and knownLoot ~= nil then
+            RaidTrack._pendingReqs[name] = { knownEP = knownEP, knownLoot = knownLoot }
+        end
+        return
+    end
 
     local sendFull = (knownEP == 0 and knownLoot == 0)
     local payload, maxEP, maxLoot
@@ -220,10 +250,10 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
         RaidTrackDB.syncStates[UnitName("player")]      = maxEP
         RaidTrackDB.lootSyncStates[UnitName("player")]  = maxLoot
     else
-        local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP)
+        local epgpDelta = RaidTrack.GetEPGPChangesSince(knownEP or 0)
         local lootDelta = {}
         for _, e in ipairs(RaidTrackDB.lootHistory or {}) do
-            if e.id and e.id > knownLoot then table.insert(lootDelta, e) end
+            if e.id and e.id > (knownLoot or 0) then table.insert(lootDelta, e) end
         end
         payload = {
             epgpDelta   = epgpDelta,
@@ -231,7 +261,7 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
             epgpWipeID  = CurWipe(),  -- niosą też wipeId
         }
 
-        local maxEP2, maxLoot2 = knownEP, knownLoot
+        local maxEP2, maxLoot2 = knownEP or 0, knownLoot or 0
         for _, e in ipairs(epgpDelta) do if e.id and e.id > maxEP2  then maxEP2  = e.id end end
         for _, e in ipairs(lootDelta) do if e.id and e.id > maxLoot2 then maxLoot2 = e.id end end
 
@@ -250,30 +280,9 @@ function RaidTrack.SendSyncDataTo(name, knownEP, knownLoot)
     RaidTrack.pendingSends[name] = RaidTrack.pendingSends[name] or {}
     RaidTrack.pendingSends[name].chunks = chunks
 
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PING", "WHISPER", name)
-
-    if sendFull then
-        C_Timer.NewTimer(15, function()
-            local p = RaidTrack.pendingSends[name]
-            if p and not p.gotPong then
-                RaidTrack.pendingSends[name] = nil
-            end
-        end)
-    end
-
-    -- zawsze wyślij CFG (ustawienia) osobno
-    if RaidTrack.IsOfficer() then
-        local cfgPayload = {
-            settings = {
-                minSyncRank         = RaidTrackDB.settings.minSyncRank,
-                officerOnly         = RaidTrackDB.settings.officerOnly,
-                autoSync            = RaidTrackDB.settings.autoSync
-            },
-            epgpWipeID = CurWipe(),
-        }
-        local cfgStr = RaidTrack.SafeSerialize(cfgPayload)
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG|" .. cfgStr, "WHISPER", name)
-    end
+    -- nie wysyłamy nic więcej – chunks wyśle się po PONG tylko jeśli ktoś oczekiwał (poniżej w handlerze)
+    -- tutaj peer już jest validated, więc możemy od razu odpalić batch:
+    RaidTrack.SendChunkBatch(name)
 end
 
 function RaidTrack.SendChunkBatch(name)
@@ -286,6 +295,7 @@ function RaidTrack.SendChunkBatch(name)
         RaidTrack.lastSyncTime = time()
         return
     end
+
     local any = false
     for idx, c in ipairs(p.chunks) do
         if c then
@@ -304,25 +314,70 @@ function RaidTrack.SendChunkBatch(name)
     end
 end
 
+-- Lekki broadcast do gildii (bez ujawniania wipeID) + pełny tylko do zweryfikowanych peerów
 function RaidTrack.BroadcastSettings()
     if not RaidTrack.IsOfficer() then return end
 
     if RaidTrack.ApplyUITabVisibility then RaidTrack.ApplyUITabVisibility() end
     if RaidTrack.RefreshMinimapMenu then RaidTrack.RefreshMinimapMenu() end
 
-    local payload = {
+    -- 1) Lekki broadcast do GUILD (bez epgpWipeID)
+    local light = {
         settings = {
-            minSyncRank         = RaidTrackDB.settings.minSyncRank,
-            officerOnly         = RaidTrackDB.settings.officerOnly,
-            autoSync            = RaidTrackDB.settings.autoSync,
-            minUITabRankIndex   = RaidTrackDB.settings.minUITabRankIndex,
-        },
+            minSyncRank       = RaidTrackDB.settings.minSyncRank,
+            officerOnly       = RaidTrackDB.settings.officerOnly,
+            autoSync          = RaidTrackDB.settings.autoSync,
+            minUITabRankIndex = RaidTrackDB.settings.minUITabRankIndex,
+        }
+    }
+    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG_LIGHT|" .. RaidTrack.SafeSerialize(light), "GUILD")
+
+    -- 2) Pełny CFG (z wipeID) tylko do klientów spełniających minimum
+    local full = {
+        settings   = light.settings,
         epgpWipeID = CurWipe(),
     }
-    local msg = RaidTrack.SafeSerialize(payload)
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "CFG|" .. msg, "GUILD")
+    local sFull = "CFG|" .. RaidTrack.SafeSerialize(full)
+
+    local me = Ambiguate(UnitName("player"), "none")
+    for i = 1, GetNumGuildMembers() do
+        local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+        name = name and Ambiguate(name, "none")
+        if online and name and name ~= me then
+            local caps = RaidTrack.peerCaps[name]
+            if caps and caps.ok then
+                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, sFull, "WHISPER", name)
+            else
+                send_ping(name)
+            end
+        end
+    end
 end
 
+-- Broadcast wipe (CFG z wipe=true) tylko do zweryfikowanych peerów
+function RaidTrack.BroadcastWipeToValidatedPeers(newWipeId, reason)
+    if not RaidTrack.IsOfficer() then return end
+    local payload = { wipe = true, epgpWipeID = newWipeId, reason = tostring(reason or "") }
+    local msg = "CFG|" .. RaidTrack.SafeSerialize(payload)
+
+    local me = Ambiguate(UnitName("player"), "none")
+    for i = 1, GetNumGuildMembers() do
+        local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+        name = name and Ambiguate(name, "none")
+        if online and name and name ~= me then
+            local caps = RaidTrack.peerCaps[name]
+            if caps and caps.ok then
+                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, msg, "WHISPER", name)
+            else
+                local need = required_min_version()
+                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ERR|UPGRADE|"..need, "WHISPER", name)
+                send_ping(name)
+            end
+        end
+    end
+end
+
+-- główny handler
 local mf = CreateFrame("Frame")
 mf:RegisterEvent("CHAT_MSG_ADDON")
 mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
@@ -338,7 +393,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
     if prefix ~= SYNC_PREFIX or sender == UnitName("player") then return end
     local who = Ambiguate(sender, "none")
 
-    -- stary auction header (legacy)
+    -- === legacy auction (zostawione dla wstecznej kompatybilności) ===
     if msg:sub(1, 13) == "AUCTION_ITEM|" then
         local payload = msg:sub(14)
         local ok, data = RaidTrack.SafeDeserialize(payload)
@@ -371,37 +426,138 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         end
         return
     end
+    -- === koniec legacy auction ===
 
-    if msg == "PING" then
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "PONG", "WHISPER", who)
-        return
-    elseif msg == "PONG" and RaidTrack.pendingSends[who] then
-        RaidTrack.pendingSends[who].gotPong = true
-        RaidTrack.SendChunkBatch(who)
-        return
-    elseif msg == "PONG" then
-        RaidTrack.lastSyncTime = time()
+    -- === wersjonowany handshake ===
+    if msg:sub(1,4) == "PING" then
+        local v, p, min = msg:match("^PING|([^|]+)|(%d+)|([^|]+)$")
+        if v and p and min then
+            if tonumber(p) ~= RaidTrack.PROTOCOL then
+                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ERR|PROTO|"..RaidTrack.PROTOCOL, "WHISPER", who)
+                notifyLegacy(who, required_min_version(), "protocol mismatch")
+                return
+            end
+            if semver_cmp(RaidTrack.VERSION, min) < 0 then
+                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ERR|UPGRADE|"..min, "WHISPER", who)
+                notifyLegacy(who, min, "handshake")
+                return
+            end
+            local pong = string.format("PONG|%s|%d", RaidTrack.VERSION, RaidTrack.PROTOCOL)
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, pong, "WHISPER", who)
+            return
+        else
+            -- legacy ping
+            local need = required_min_version()
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ERR|UPGRADE|"..need, "WHISPER", who)
+            notifyLegacy(who, need, "handshake")
+            return
+        end
+
+    elseif msg:sub(1,4) == "PONG" then
+        local v, p = msg:match("^PONG|([^|]+)|(%d+)$")
+        if v and p then
+            if tonumber(p) ~= RaidTrack.PROTOCOL then
+                RaidTrack.peerCaps[who] = { ver = v, proto = tonumber(p), ok = false }
+                dbg("[Sync] PONG proto mismatch from " .. tostring(who))
+                return
+            end
+            local ok = peer_meets_my_min(v)
+            RaidTrack.peerCaps[who] = { ver = v, proto = tonumber(p), ok = ok }
+            if not ok then
+                dbg("[Sync] PONG too old from " .. tostring(who) .. " v="..tostring(v))
+                return
+            end
+            -- jeśli był REQ_SYNC oczekujący na handshake -> dokończ wysyłkę
+            local pend = RaidTrack._pendingReqs[who]
+            if pend then
+                RaidTrack._pendingReqs[who] = nil
+                RaidTrack.SendSyncDataTo(who, pend.knownEP or 0, pend.knownLoot or 0)
+                return
+            end
+            -- jeśli ktoś czeka na PONG do wysłania chunków:
+            if RaidTrack.pendingSends[who] and RaidTrack.pendingSends[who].chunks then
+                RaidTrack.pendingSends[who].gotPong = true
+                RaidTrack.SendChunkBatch(who)
+                return
+            end
+            RaidTrack.lastSyncTime = time()
+            return
+        else
+            -- legacy PONG → ignorujemy
+            RaidTrack.peerCaps[who] = { ver = "0.0.0", proto = 0, ok = false }
+            dbg("[Sync] Legacy PONG from " .. tostring(who))
+            return
+        end
+
+    elseif msg:sub(1,10) == "ERR|PROTO|" then
+        dbg("[Sync] Peer protocol mismatch: "..tostring(who))
         return
 
-    elseif msg:sub(1, 9) == "REQ_SYNC|" then
-        local _, epStr, lootStr = strsplit("|", msg)
-        local knownEP   = tonumber(epStr)  or 0
-        local knownLoot = tonumber(lootStr) or 0
-        RaidTrack.SendSyncDataTo(who, knownEP, knownLoot)
+    elseif msg:sub(1,12) == "ERR|UPGRADE|" then
+        dbg("[Sync] Peer needs upgrade: "..tostring(who))
         return
+    end
+    -- === koniec wersjonowanego handshake ===
 
-    elseif msg:sub(1, 4) == "ACK|" then
+    -- REQ_SYNC|<ep>|<loot> (legacy-safe). Wysyłamy dopiero po walidacji.
+    if msg:sub(1, 9) == "REQ_SYNC|" then
+        local ep, loot = msg:match("^REQ_SYNC|(%d+)|(%d+)$")
+        if not ep or not loot then
+            -- fallback dla dziwnych payloadów
+            local parts = { strsplit("|", msg) }
+            ep   = tonumber(parts[2] or 0) or 0
+            loot = tonumber(parts[3] or 0) or 0
+        else
+            ep   = tonumber(ep) or 0
+            loot = tonumber(loot) or 0
+        end
+
+        local caps = RaidTrack.peerCaps[who]
+        if not (caps and caps.ok) then
+            RaidTrack._pendingReqs[who] = { knownEP = ep, knownLoot = loot }
+            send_ping(who)
+            dbg("[Sync] REQ_SYNC queued (await handshake) from "..tostring(who))
+            return
+        end
+
+        RaidTrack.SendSyncDataTo(who, ep, loot)
+        return
+    end
+
+    if msg:sub(1, 4) == "ACK|" then
         local idx = tonumber(msg:sub(5))
         local p = RaidTrack.pendingSends[who]
-        if p and p.chunks[idx] then p.chunks[idx] = nil end
+        if p and p.chunks and p.chunks[idx] then p.chunks[idx] = nil end
         return
+    end
 
-    elseif msg:sub(1, 4) == "CFG|" then
+    if msg:sub(1, 10) == "CFG_LIGHT|" then
+        local cfgStr = msg:sub(11)
+        local ok, data = RaidTrack.SafeDeserialize(cfgStr)
+        if ok and data and data.settings then
+            for k, v in pairs(data.settings) do
+                if v ~= nil then RaidTrackDB.settings[k] = v end
+            end
+            if RaidTrack.UpdateSettingsTab   then RaidTrack.UpdateSettingsTab() end
+            if RaidTrack.ApplyUITabVisibility then RaidTrack.ApplyUITabVisibility() end
+            if RaidTrack.RefreshMinimapMenu then RaidTrack.RefreshMinimapMenu() end
+        end
+        return
+    end
+
+    if msg:sub(1, 4) == "CFG|" then
         local cfgStr = msg:sub(5)
         local ok, data = RaidTrack.SafeDeserialize(cfgStr)
         if not ok then return end
 
+        -- nie przyjmuj wipe/epgpWipeID od niezweryfikowanego nadawcy
+        if (data.wipe or data.epgpWipeID) and not (RaidTrack.peerCaps[who] and RaidTrack.peerCaps[who].ok) then
+            dbg("[Sync] Ignored CFG wipe from non-validated peer: "..tostring(who))
+            data.wipe, data.epgpWipeID = nil, nil
+        end
+
         local localWipe = CurWipe()
+
         -- WIPE announcement → jeśli wyższy: adoptuj, wyczyść i poproś NADAWCĘ o FULL
         if data.wipe and tonumber(data.epgpWipeID or 0) then
             local incoming = tonumber(data.epgpWipeID) or 0
@@ -442,7 +598,7 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         return
     end
 
-    -- chunk łączenie
+    -- === Chunk łączenie (FULL/DELTA) ===
     local i, t, d = msg:match("^(%d+)|(%d+)|(.+)$")
     i, t = tonumber(i), tonumber(t)
     if not (i and t and d) then return end
@@ -458,6 +614,17 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         RaidTrack.chunkBuffer[who] = nil
         local ok, data = RaidTrack.SafeDeserialize(full)
         if not ok then return end
+
+        -- FULL od niezweryfikowanego peera? Nie przyjmujemy.
+        if data.full and not (RaidTrack.peerCaps[who] and RaidTrack.peerCaps[who].ok) then
+            dbg("[Sync] Ignored FULL from non-validated peer: "..tostring(who))
+            return
+        end
+        -- DELTA od niezweryfikowanego peera? Nie przyjmujemy.
+        if (data.epgpDelta or data.lootDelta or data.epgpWipeID) and not (RaidTrack.peerCaps[who] and RaidTrack.peerCaps[who].ok) then
+            dbg("[Sync] Ignored DELTA from non-validated peer: "..tostring(who))
+            return
+        end
 
         -- === FULL ===
         if data.full then
@@ -499,9 +666,9 @@ mf:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
             }
             local lastEP = RaidTrackDB.epgpLog.lastId or 0
 
-            RaidTrackDB.syncStates[who]                 = lastEP
-            RaidTrackDB.syncStates[UnitName("player")]  = lastEP
-            RaidTrackDB.lootSyncStates[who]             = maxLoot
+            RaidTrackDB.syncStates[who]                    = lastEP
+            RaidTrackDB.syncStates[UnitName("player")]     = lastEP
+            RaidTrackDB.lootSyncStates[who]                = maxLoot
             RaidTrackDB.lootSyncStates[UnitName("player")] = maxLoot
 
             RaidTrack.lastSyncTime = time()
@@ -572,7 +739,7 @@ loginFrame:SetScript("OnEvent", function(_, evt)
     end
 end)
 
--- auction chunk
+-- === auction chunk (bez zmian logiki, tylko drobne sanity) ===
 local af = CreateFrame("Frame")
 af:RegisterEvent("CHAT_MSG_ADDON")
 af:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
@@ -580,7 +747,7 @@ af:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
         if msg:sub(1, 8) == "RTCHUNK^" then
             RaidTrack.HandleChunkedAuctionPiece(sender, msg)
         else
-            RaidTrack.AddDebugMessage("Ignored non-chunked auction message: " .. msg)
+            RaidTrack.AddDebugMessage("Ignored non-chunked auction message: " .. tostring(msg))
         end
         return
     end

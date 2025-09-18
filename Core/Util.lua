@@ -17,17 +17,12 @@ function RaidTrack.SafeDeserialize(str)
     return true, payload
 end
 
-
-
-
 -- define once (idempotent)
 if not RaidTrack._AddDebugMessageCore then
     local function _maxLogLines()
         RaidTrackDB.settings = RaidTrackDB.settings or {}
-        -- domyślnie 1000, można zmienić w /rtlogsize
         return tonumber(RaidTrackDB.settings.debugMaxLines) or 1000
     end
-
     function RaidTrack._AddDebugMessageCore(msg, opts)
         if msg == nil then return end
         opts = opts or {}
@@ -49,8 +44,7 @@ if not RaidTrack._AddDebugMessageCore then
     end
 end
 
-
--- public alias (can be wrapped later by UI)
+-- public alias
 RaidTrack.AddDebugMessage = RaidTrack._AddDebugMessageCore
 
 -- Officer check (cache + fallback)
@@ -58,18 +52,23 @@ function RaidTrack.IsOfficer()
     if not IsInGuild() then return false end
     RaidTrack._officerCache = RaidTrack._officerCache or { verdict = false, ts = 0 }
     local now = (GetTime and GetTime()) or time()
+
     if C_GuildInfo and C_GuildInfo.CanEditOfficerNote and C_GuildInfo.CanEditOfficerNote() then
         RaidTrack._officerCache.verdict = true
         RaidTrack._officerCache.ts = now
         return true
     end
+
     if (now - (RaidTrack._officerCache.ts or 0)) < 10 then
         return RaidTrack._officerCache.verdict and true or false
     end
+
     local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
     if myFull == "" then return false end
+
     local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
     if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
+
     local n = GetNumGuildMembers() or 0
     if n == 0 then
         if C_Timer and C_Timer.After then
@@ -77,6 +76,7 @@ function RaidTrack.IsOfficer()
         end
         return RaidTrack._officerCache.verdict and true or false
     end
+
     for i = 1, n do
         local name, _, rankIndex = GetGuildRosterInfo(i)
         if name == myFull then
@@ -91,13 +91,21 @@ function RaidTrack.IsOfficer()
     return false
 end
 
--- dodatkowy cache eventowy (bez zmian funkcjonalnych)
+-- event cache
 RaidTrack._officerCache = RaidTrack._officerCache or { ready = false, isOfficer = false, lastCheck = 0 }
 function RaidTrack._UpdateOfficerCache()
-    if not IsInGuild() then RaidTrack._officerCache.ready = true; RaidTrack._officerCache.isOfficer = false; return end
+    if not IsInGuild() then
+        RaidTrack._officerCache.ready = true
+        RaidTrack._officerCache.isOfficer = false
+        return
+    end
     if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
     local myFull = (GetUnitName and GetUnitName("player", true)) or UnitName("player") or ""
-    if myFull == "" then RaidTrack._officerCache.ready = false; RaidTrack._officerCache.isOfficer = false; return end
+    if myFull == "" then
+        RaidTrack._officerCache.ready = false
+        RaidTrack._officerCache.isOfficer = false
+        return
+    end
     local minRank = tonumber(RaidTrackDB and RaidTrackDB.settings and RaidTrackDB.settings.minSyncRank) or 1
     local found, isOfficer = false, false
     local n = GetNumGuildMembers() or 0
@@ -110,7 +118,7 @@ function RaidTrack._UpdateOfficerCache()
 end
 
 if not RaidTrack._guildEvtFrame then
-    local f = CreateFrame("Frame", nil, UIParent)  -- albo po prostu CreateFrame("Frame")
+    local f = CreateFrame("Frame", nil, UIParent)
     f:RegisterEvent("PLAYER_LOGIN")
     f:RegisterEvent("PLAYER_GUILD_UPDATE")
     f:RegisterEvent("GUILD_ROSTER_UPDATE")
@@ -142,7 +150,7 @@ function RaidTrack.DebugTableToString(tbl)
     return str
 end
 
--- EPGP helpers (twoje bez zmian)
+-- EPGP helpers
 function RaidTrack.AddLootToLog(player, itemID, gp)
     local lootEntry = { player = player, itemID = itemID, gp = gp, timestamp = time() }
     table.insert(RaidTrackDB.lootHistory, lootEntry)
@@ -229,7 +237,7 @@ function RaidTrack.GetClassTokenFromLocalized(classLocalized)
     return classLocalized
 end
 
--- Toasty (bez zmian merytorycznych)
+-- Toasty
 local function CreateEPGPToastFrame()
     local frame = CreateFrame("Frame", "RaidTrackEPGPToast", UIParent)
     frame:SetPoint("TOP", UIParent, "TOP", 0, -200)
@@ -389,7 +397,7 @@ SlashCmdList["RTDEBUG"] = function(msg)
     end
 end
 
--- ==== Slash Help Registry (jak było) ====
+-- ==== Slash Help Registry ====
 RaidTrack.Slash = RaidTrack.Slash or { descr = {}, order = {}, byTag = {} }
 function RaidTrack.SetSlashDescription(tag, text) RaidTrack.Slash.descr[tag] = tostring(text or "") end
 function RaidTrack.RegisterSlash(opts, handler, description)
@@ -462,7 +470,7 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
         return
     end
 
-    -- 1) licznik +1 (nie reset!)
+    -- 1) licznik +1
     RaidTrack.EnsureWipeId()
     local before = RaidTrack.GetWipeId()
     if not RaidTrack.IncrementWipeId("allplayers-wipe") then return end
@@ -478,14 +486,11 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
     -- lustro legacy
     RaidTrackDB.epgpWipeID = tostring(after)
 
-    -- legacy mirror
-    RaidTrackDB.epgpWipeID = tostring(after)
-
     -- 3) odśwież UI
     if RaidTrack.UpdateEPGPList then RaidTrack.UpdateEPGPList() end
     if RaidTrack.RefreshLootTab then RaidTrack.RefreshLootTab() end
 
-    -- 4) ogłoś wipe (CFG), ale NIE proś o REQ_SYNC (to my jesteśmy źródłem prawdy)
+    -- 4) ogłoszenie wipe (CFG) — legacy klienci NIE adoptują (gating jest w TryAdoptRemoteWipeId)
     local announce = { wipe = true, epgpWipeID = after, reason = reason }
     local msg = RaidTrack.SafeSerialize(announce)
     local PREFIX = (type(SYNC_PREFIX) == "string" and SYNC_PREFIX) or "RaidTrackSync"
@@ -494,16 +499,20 @@ function RaidTrack.DoGlobalWipeAllPlayers(reason)
     RaidTrack.AddDebugMessage("Global wipe done (allplayers). wipeId: " .. tostring(before) .. " -> " .. tostring(after) .. "; reason=" .. tostring(reason))
 end
 
--- Poproś WSZYSTKICH online o FULL (REQ_SYNC|0|0) – bez dotykania Sync.lua
+-- Poproś WSZYSTKICH online o FULL (REQ_SYNC|0|0|VER|PROTO)
 function RaidTrack.RequestFullSyncForDbVersion()
     if not IsInGuild() then return end
     local SYNC_PREFIX = "RaidTrackSync"
     local me = Ambiguate(UnitName("player"), "none")
+    local ver = tostring(RaidTrack.VERSION or "0.0.0")
+    local proto = tonumber(RaidTrack.PROTOCOL or 1) or 1
+
     for i = 1, GetNumGuildMembers() do
         local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
         name = name and Ambiguate(name, "none")
         if online and name and name ~= me then
-            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQ_SYNC|0|0", "WHISPER", name)
+            local payload = string.format("REQ_SYNC|0|0|%s|%d", ver, proto)
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, payload, "WHISPER", name)
         end
     end
     if RaidTrack.AddDebugMessage then

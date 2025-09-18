@@ -67,6 +67,7 @@ UI/RaidConfigUI.lua
 UI\RaidCreateUI.lua
 UI/RaidTab.lua
 UI/EPGPTab.lua
+UI\EPGPLogTab.lua
 UI/LootTab.lua
 UI/SettingsTab.lua
 UI/GuildTab.lua

@@ -129,7 +129,7 @@ function RaidTrack:Render_settingsTab(container)
     end)
 
     local rankLabel = AceGUI:Create("Label")
-    rankLabel:SetText("Min guild rank:")
+    rankLabel:SetText("Min guild rank to sync:")
     rankLabel:SetFullWidth(true)
     rankLabel:SetHeight(20)
     topGroup:AddChild(rankLabel)
