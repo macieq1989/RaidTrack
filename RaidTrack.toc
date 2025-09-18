@@ -50,6 +50,7 @@ Core\DbVersion.lua
 Core\Version.lua
 Core/EPGP.lua
 Core/Sync.lua
+Core\RaidID.lua
 Core/Auction.lua
 Core/AutoTrade.lua
 Core/OfflineRaidData.lua
