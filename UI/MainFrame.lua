@@ -15,15 +15,19 @@ function RaidTrack:CreateMainFrame()
   local tabs = {{
     text = "Raid",
     value = "raidTab"
-}, {
+}, 
+ {
+    text = "Raid IDs",
+    value = "raidIdTab",
+    
+},{
     text = "EPGP",
     value = "epgpTab",
     restricted = false
 }, {
-    -- NEW: EPGP Log tab
     text = "EPGP Log",
     value = "epgpLogTab",
-    restricted = false
+    
 }, {
     text = "Loot",
     value = "lootTab"
@@ -34,6 +38,7 @@ function RaidTrack:CreateMainFrame()
     text = "Settings",
     value = "settingsTab"
 }}
+
 
     -- Zachowaj czystą (niemutowaną przez AceGUI) kopię tabów
     RaidTrack._all_tabs_source = {}
@@ -94,6 +99,9 @@ function RaidTrack:CreateMainFrame()
         local activeTab = RaidTrack.activeTab or ""
         if activeTab == "raidTab" and RaidTrack.UpdateRaidList then
             RaidTrack.UpdateRaidList()
+            elseif activeTab == "raidIdTab" and RaidTrack.RefreshRaidIdTab then
+    RaidTrack.RefreshRaidIdTab()
+
         elseif activeTab == "epgpTab" and RaidTrack.UpdateEPGPList then
             RaidTrack.UpdateEPGPList()
         elseif activeTab == "epgpLogTab" and RaidTrack.RefreshEPGPLogTab then  -- [NOWE]
