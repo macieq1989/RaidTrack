@@ -22,23 +22,19 @@ local function PlayerFullName()
 end
 
 -- — normalizacja realmów i porównanie członkostwa w grupie/raidzie —
-local function _normRealm(r)
-  return tostring(r or ""):lower():gsub("[%s%p]", "") -- usuń spacje i znaki, do lower
-end
-
+local function _normRealm(r)  return tostring(r or ""):lower():gsub("[%s%p]", "") end
 local function _splitFull(full)
   local n, r = tostring(full or ""):match("^([^%-]+)%-?(.*)$")
   if r and r ~= "" then r = _normRealm(r) else r = nil end
   return n, r
 end
-
 local function _buildGroupSet()
   local set = {}
   local function add(unit)
     if not UnitExists(unit) then return end
     local n, r = UnitFullName(unit); if not n then return end
-    set[n] = true                               -- Name
-    set[n.."-".._normRealm(r)] = true           -- Name-realm (znormalizowany)
+    set[n] = true
+    set[n.."-".._normRealm(r)] = true
   end
   if IsInRaid() then
     for i=1, GetNumGroupMembers() do add("raid"..i) end
@@ -50,13 +46,12 @@ local function _buildGroupSet()
   end
   return set
 end
-
 local function IsFullNameInMyGroup(fullName)
   local n, r = _splitFull(fullName)
   if not n then return false end
   local set = _buildGroupSet()
-  if set[n] then return true end                 -- match po samym „Name”
-  if r and set[n.."-"..r] then return true end  -- match po „Name-Realm”
+  if set[n] then return true end
+  if r and set[n.."-"..r] then return true end
   return false
 end
 
@@ -71,7 +66,42 @@ local function fmtReset(sec)
   return string.format("%dm", m)
 end
 
--- mapa moich lockoutów: key = name .. "||" .. diff  → id
+-- Czytelna nazwa trudności z ID (fallback na mapę, gdy API nie zwróci)
+local DIFF_FALLBACK = {
+  [1]  = "5 Normal",
+  [2]  = "5 Heroic",
+  [3]  = "10 Normal",
+  [4]  = "25 Normal",
+  [5]  = "10 Heroic",
+  [6]  = "25 Heroic",
+  [7]  = "LFR",
+  [8]  = "Challenge",
+  [9]  = "40 Player",
+  [11] = "Heroic (Legacy)",
+  [12] = "Normal (Legacy)",
+  [14] = "Normal",
+  [15] = "Heroic",
+  [16] = "Mythic",
+  [17] = "LFR",
+  [23] = "5 Mythic",
+  [24] = "5 Timewalking",
+  [33] = "Timewalking (Raid)",
+}
+local function prettyDiff(diffRaw)
+  local s = tostring(diffRaw or "")
+  local id = tonumber(s)
+  if id then
+    if GetDifficultyInfo then
+      local name = GetDifficultyInfo(id) -- w Retail/Classic zwraca lokalizowaną nazwę
+      if name and name ~= "" then return name end
+    end
+    return DIFF_FALLBACK[id] or ("Diff "..id)
+  end
+  -- jeśli to już jest tekst (np. "25 Player"), pokaż jak jest
+  return s
+end
+
+-- mapa moich lockoutów: key = name .. "||" .. <RAW diff>  → id
 local function buildMyLockoutMap(results)
   local map = {}
   if not results then return map end
@@ -79,29 +109,24 @@ local function buildMyLockoutMap(results)
   local myName, myRealm = UnitFullName("player")
   local myNorm = myName.."-".._normRealm(myRealm or GetRealmName())
 
-  -- dopasuj klucz w results niezależnie od formatu
-  local candidateKeys = {}
+  -- dopasuj klucz w results niezależnie od formatu realm
+  local myKey
   for who,_ in pairs(results) do
     local n, r = _splitFull(who)
     if n == myName then
-      table.insert(candidateKeys, who)
-      -- preferuj idealny match po realmie
-      if r and (n.."-"..r) == myNorm then
-        candidateKeys = { who }
-        break
-      end
+      myKey = myKey or who
+      if r and (n.."-"..r) == myNorm then myKey = who; break end
     end
   end
-  local myKey = candidateKeys[1]
   if not myKey then return map end
 
   local list = results[myKey] or {}
   for _, e in ipairs(list) do
     local name  = tostring(e.name or "?")
-    local diff  = tostring(e.diff or "?")
+    local diffR = tostring(e.diff or "?") -- RAW!
     local id    = tostring(e.id or "")
     if id ~= "" and id ~= "—" then
-      map[name.."||"..diff] = id
+      map[name.."||"..diffR] = id
     end
   end
   return map
@@ -114,12 +139,12 @@ local function passesFilter(row, filterText)
   local function L(x) return tostring(x or ""):lower() end
   return L(row.player):find(filterText, 1, true)
       or L(row.name):find(filterText, 1, true)
-      or L(row.diff):find(filterText, 1, true)
+      or L(row.diffDisp):find(filterText, 1, true) -- filtr po ładnym tekście diff
       or L(row.id):find(filterText, 1, true)
       or L(row.reset):find(filterText, 1, true)
 end
 
--- Zwraca posortowaną listę wierszy { player, name, diff, id, reset, differs }
+-- Zwraca posortowaną listę wierszy { player, name, diffRaw, diffDisp, id, reset, differs }
 local function flattenResults(results, raidOnly, filterText)
   local myMap = buildMyLockoutMap(results)
   local rows = {}
@@ -134,27 +159,29 @@ local function flattenResults(results, raidOnly, filterText)
           return tostring(a.name) < tostring(b.name)
         end)
         for _, e in ipairs(list) do
-          local name  = e.name or "?"
-          local diff  = e.diff or "?"
-          local idStr = tostring(e.id or "?")
-          local reset = fmtReset(e.resetSec or 0)
-          local key   = tostring(name).."||"..tostring(diff)
-          local myId  = myMap[key]
+          local name    = e.name or "?"
+          local diffRaw = tostring(e.diff or "?")
+          local diffTxt = prettyDiff(diffRaw)
+          local idStr   = tostring(e.id or "?")
+          local reset   = fmtReset(e.resetSec or 0)
+          local key     = tostring(name).."||"..diffRaw -- porównujemy po RAW!
+          local myId    = myMap[key]
           local differs = (myId and idStr ~= myId) and (idStr ~= "—")
           local row = {
-            player = who,
-            name   = name,
-            diff   = diff,
-            id     = idStr,
-            reset  = reset,
-            differs = differs,
+            player   = who,
+            name     = name,
+            diffRaw  = diffRaw,
+            diffDisp = diffTxt,
+            id       = idStr,
+            reset    = reset,
+            differs  = differs,
           }
           if passesFilter(row, filterText) then
             table.insert(rows, row)
           end
         end
       else
-        local row = { player = who, name = "—", diff = "—", id = "—", reset = "—", differs = false }
+        local row = { player = who, name = "—", diffRaw = "—", diffDisp = "—", id = "—", reset = "—", differs = false }
         if passesFilter(row, filterText) then
           table.insert(rows, row)
         end
@@ -200,7 +227,7 @@ local function buildHeader(parent)
 
   headerCell("Player",   180)
   headerCell("Instance", 260)
-  headerCell("Diff",      90)
+  headerCell("Diff",      120) -- minimalnie szersze pod pełne nazwy
   headerCell("ID",       130)
   headerCell("Reset",     80)
 
@@ -240,11 +267,11 @@ local function rebuildTable()
     line:SetFullWidth(true)
     line:SetLayout("Flow")
 
-    addCell(line, r.player, 180, nil)
-    addCell(line, r.name,   260, nil)
-    addCell(line, r.diff,    90, nil)
-    addCell(line, r.id,     130, r.differs and COLOR_RED or nil) -- kolorujemy ID różne od moich
-    addCell(line, r.reset,   80, nil)
+    addCell(line, r.player,   180, nil)
+    addCell(line, r.name,     260, nil)
+    addCell(line, r.diffDisp, 120, nil)                         -- ładny tekst trudności
+    addCell(line, r.id,       130, r.differs and COLOR_RED or nil) -- czerwone jeśli inne niż moje
+    addCell(line, r.reset,     80, nil)
 
     ui.scroll:AddChild(line)
   end
@@ -258,9 +285,7 @@ function RaidTrack.RefreshRaidIdTab()
   end
   rebuildTable()
 end
-
--- Alias, bo moduł zbierający wywołuje UpdateRaidIdTab jeśli istnieje:
-RaidTrack.UpdateRaidIdTab = RaidTrack.RefreshRaidIdTab
+RaidTrack.UpdateRaidIdTab = RaidTrack.RefreshRaidIdTab -- alias
 
 -- === Renderer zakładki ===
 function RaidTrack:Render_raidIdTab(container)

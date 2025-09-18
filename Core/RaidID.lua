@@ -5,37 +5,41 @@ RaidTrack = RaidTrack or {}
 local M = RaidTrack.RaidID or {}
 RaidTrack.RaidID = M
 
--- Osobny, krótki prefix (<=16 znaków) na AddOn Messages
 local RID_PREFIX = "RaidTrackRID"
 if not C_ChatInfo.IsAddonMessagePrefixRegistered(RID_PREFIX) then
   C_ChatInfo.RegisterAddonMessagePrefix(RID_PREFIX)
 end
 
--- Zarejestruj handler przez istniejący dispatcher w Core/Sync.lua
 if RaidTrack.RegisterChunkHandler then
   RaidTrack.RegisterChunkHandler(RID_PREFIX, function(sender, message)
     M:OnAddonMessage(sender, message)
   end)
 end
 
--- ====== Stan modułu ======
 M.state = M.state or {
   collecting    = false,
   startedAt     = 0,
   timeoutSec    = 3.0,
-  requester     = nil,       -- pełna nazwa proszącego
-  results       = {},        -- [player] = { {name=..., id=..., diff=..., resetSec=..., resetText=...}, ... }
+  requester     = nil,
+  results       = {},  -- [player] = { {name=..., id=..., diff=RAW, resetSec=..., resetText=...}, ... }
 }
 
--- ====== Utilsy ======
+-- ==== utils ====
 local function PlayerFullName()
-  if UnitFullName then
-    local n, r = UnitFullName("player")
-    r = r and r ~= "" and r or GetRealmName()
-    return (n or "Player") .. "-" .. (r:gsub("%s+", ""))
+  local n, r = UnitFullName("player")
+  r = r and r ~= "" and r or GetRealmName()
+  return (n or "Player") .. "-" .. (r:gsub("%s+", ""))
+end
+
+local function NormalizeFullName(s)
+  if not s or s == "" then return s end
+  local n, r = s:match("^([^%-]+)%-?(.*)$")
+  if r == "" then
+    local _, rr = UnitFullName("player")
+    r = rr or GetRealmName()
   end
-  local n = UnitName("player") or "Player"
-  return n .. "-" .. (GetRealmName():gsub("%s+", ""))
+  r = tostring(r):gsub("%s+", "")
+  return n.."-"..r
 end
 
 local function InGroupChannel()
@@ -55,39 +59,37 @@ local function fmtReset(seconds)
   return string.format("%dm", m)
 end
 
+-- POPRAWKA: używamy poprawnej kolejności zwrotów z GetSavedInstanceInfo()
+-- Retail/DF: name, id, reset, difficultyID, locked, extended, instanceIDMostSig, isRaid, maxPlayers, difficultyName, numEnc, prog, extendDisabled, instanceID
 local function collectMyLockouts()
   local entries = {}
   local n = GetNumSavedInstances and (GetNumSavedInstances() or 0) or 0
   for i = 1, n do
-    local name, id, reset, diffId, locked, extended, isRaid, maxPlayers, diffName =
+    local name, id, reset, diffId, locked, extended, _, isRaid, maxPlayers, diffName =
       GetSavedInstanceInfo(i)
     if isRaid and locked and id then
-      diffName = diffName or (maxPlayers and (maxPlayers .. "m")) or "?"
+      -- do payloadu wysyłamy surowy diffId (jeśli jest), inaczej nazwę
+      local diffRaw = (diffId ~= nil) and tostring(diffId) or tostring(diffName or (maxPlayers and (maxPlayers.."m") or "?"))
       table.insert(entries, string.format("%s|%s|%s|%d",
-        tostring(name or "?"), tostring(id), tostring(diffName), tonumber(reset or 0) or 0))
+        tostring(name or "?"), tostring(id), diffRaw, tonumber(reset or 0) or 0))
     end
   end
   return table.concat(entries, ";")
 end
 
--- ====== Emisja wyników (serializacja „prosta”) ======
+-- ====== Emisja wyników ======
 local pendingBroadcast = false
 local respondWhisperTo = nil
 
 local function sendMyRIDResponse()
   local payload = collectMyLockouts()
-  local me = PlayerFullName()
   local msg = "RID_RSP|" .. payload
-  -- zawsze WHISPER do proszącego (requester znany z RID_REQ)
   if respondWhisperTo and respondWhisperTo ~= "" then
     C_ChatInfo.SendAddonMessage(RID_PREFIX, msg, "WHISPER", respondWhisperTo)
-  else
-    -- awaryjnie: nic nie rób
   end
   pendingBroadcast, respondWhisperTo = false, nil
 end
 
--- Własny frame do UPDATE_INSTANCE_INFO (dispatcher CHAT_MSG_ADDON już masz w Core/Sync.lua)
 local f = CreateFrame("Frame")
 f:RegisterEvent("UPDATE_INSTANCE_INFO")
 f:SetScript("OnEvent", function(_, evt)
@@ -109,28 +111,21 @@ function M:Request(timeoutSec)
   self.state.requester  = PlayerFullName()
   wipe(self.state.results)
 
-  -- Wyślij prośbę do grupy/raida; odpowiadajcie WHISPEREM do mnie
   local msg = "RID_REQ|" .. self.state.requester
   C_ChatInfo.SendAddonMessage(RID_PREFIX, msg, ch)
 
-  -- Odśwież i wyślij swoje lockouty do siebie (też WHISPER), żeby mieć pełny obraz
   pendingBroadcast   = true
   respondWhisperTo   = self.state.requester
   if RequestRaidInfo then RequestRaidInfo() else sendMyRIDResponse() end
 
-  -- Zakończ kolekcję po timeout
   C_Timer.After(self.state.timeoutSec, function()
     self.state.collecting = false
-    -- jeśli chcesz od razu zobaczyć wynik w czacie:
     self:PrintResults()
-    -- a do UI w nowej zakładce po prostu odpalisz RaidTrack.UpdateRaidIdTab() (jak ją zrobimy)
     if RaidTrack.UpdateRaidIdTab then RaidTrack.UpdateRaidIdTab() end
   end)
 end
 
-function M:GetResults()
-  return self.state.results
-end
+function M:GetResults()  return self.state.results end
 
 function M:PrintResults()
   DEFAULT_CHAT_FRAME:AddMessage("|cff00ff96[RaidTrack]|r Wyniki ID (raid lockouts):")
@@ -149,32 +144,28 @@ function M:PrintResults()
       DEFAULT_CHAT_FRAME:AddMessage("  |cffffff00"..who.."|r:")
       for _, e in ipairs(list) do
         local line = string.format("    %s (%s) — ID=%s, reset=%s",
-          e.name or "?", e.diff or "?", e.id or "?", e.resetText or "?")
+          e.name or "?", tostring(e.diff or "?"), e.id or "?", e.resetText or "?")
         DEFAULT_CHAT_FRAME:AddMessage(line)
       end
     end
   end
 end
 
--- ====== Odbiór wiadomości ======
+-- ====== Odbiór ======
 function M:OnAddonMessage(sender, message)
   if not sender or not message then return end
 
-  -- RID_REQ|<requester-fullname>
   if message:sub(1,8) == "RID_REQ|" then
     local req = message:sub(9)
     if not req or req == "" then return end
-    -- zawsze odpowiadamy WHISPEREM do proszącego
     respondWhisperTo = req
     pendingBroadcast = true
     if RequestRaidInfo then RequestRaidInfo() else sendMyRIDResponse() end
     return
   end
 
-  -- RID_RSP|<payload>
   if message:sub(1,8) == "RID_RSP|" then
-    -- nazwa nadawcy jako klucz
-    local who = sender
+    local who = NormalizeFullName(sender)
     if who and who ~= "" then
       local payload = message:sub(9) or ""
       self.state.results[who] = {}
@@ -185,7 +176,7 @@ function M:OnAddonMessage(sender, message)
           local rec = {
             name      = n or "?",
             id        = id or "?",
-            diff      = diff or "?",
+            diff      = diff or "?",         -- RAW (np. "14" / "Mythic")
             resetSec  = tonumber(resetSec) or 0,
           }
           rec.resetText = fmtReset(rec.resetSec)
@@ -203,4 +194,17 @@ SLASH_RAIDTRACKRID2 = "/raidid"
 SlashCmdList["RAIDTRACKRID"] = function(msg)
   local secs = tonumber(msg)
   M:Request(secs)
+end
+
+-- (opcjonalnie) debug: pokaż surowe zwroty API, gdyby coś jeszcze nie grało
+SLASH_RIDRAW1 = "/rtidraw"
+SlashCmdList["RIDRAW"] = function()
+  local n = GetNumSavedInstances() or 0
+  print("|cff00ff96[RaidTrack]|r Raw GetSavedInstanceInfo():")
+  for i=1,n do
+    local name, id, reset, diffId, locked, extended, instMost, isRaid, maxPlayers, diffName =
+      GetSavedInstanceInfo(i)
+    print(string.format("  [%d] name=%s id=%s diffId=%s diffName=%s isRaid=%s max=%s reset=%s locked=%s",
+      i, tostring(name), tostring(id), tostring(diffId), tostring(diffName), tostring(isRaid), tostring(maxPlayers), tostring(reset), tostring(locked)))
+  end
 end
