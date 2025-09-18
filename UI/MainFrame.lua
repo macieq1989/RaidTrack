@@ -12,23 +12,33 @@ function RaidTrack:CreateMainFrame()
     frame:EnableResize(false)
     self.mainFrame = frame
 
-    local tabs = {{
-        text = "Raid",
-        value = "raidTab"
-    }, {
-        text = "EPGP",
-        value = "epgpTab",
-        restricted = false
-    }, {
-        text = "Loot",
-        value = "lootTab"
-    }, {
-        text = "Guild",
-        value = "guildTab"
-    }, {
-        text = "Settings",
-        value = "settingsTab"
-    }}
+  local tabs = {{
+    text = "Raid",
+    value = "raidTab"
+}, 
+ {
+    text = "Raid IDs",
+    value = "raidIdTab",
+    
+},{
+    text = "EPGP",
+    value = "epgpTab",
+    restricted = false
+}, {
+    text = "EPGP Log",
+    value = "epgpLogTab",
+    
+}, {
+    text = "Loot",
+    value = "lootTab"
+}, {
+    text = "Guild",
+    value = "guildTab"
+}, {
+    text = "Settings",
+    value = "settingsTab"
+}}
+
 
     -- Zachowaj czystą (niemutowaną przez AceGUI) kopię tabów
     RaidTrack._all_tabs_source = {}
@@ -85,24 +95,28 @@ function RaidTrack:CreateMainFrame()
     refreshBtn:SetSize(80, 22)
     refreshBtn:SetText("Refresh")
     refreshBtn:SetPoint("TOPRIGHT", frame.frame, "TOPRIGHT", -40, -30)
-    refreshBtn:SetScript("OnClick", function()
+       refreshBtn:SetScript("OnClick", function()
         local activeTab = RaidTrack.activeTab or ""
         if activeTab == "raidTab" and RaidTrack.UpdateRaidList then
             RaidTrack.UpdateRaidList()
+            elseif activeTab == "raidIdTab" and RaidTrack.RefreshRaidIdTab then
+    RaidTrack.RefreshRaidIdTab()
+
         elseif activeTab == "epgpTab" and RaidTrack.UpdateEPGPList then
             RaidTrack.UpdateEPGPList()
+        elseif activeTab == "epgpLogTab" and RaidTrack.RefreshEPGPLogTab then  -- [NOWE]
+            RaidTrack.RefreshEPGPLogTab()
         elseif activeTab == "lootTab" and RaidTrack.UpdateLootList then
             RaidTrack.UpdateLootList()
         elseif activeTab == "guildTab" and RaidTrack.UpdateGuildList then
             RaidTrack.UpdateGuildList()
-
         elseif activeTab == "settingsTab" then
-            -- np. Settings tab nie potrzebuje refresh
+            -- np. Settings nie wymaga refresh
         else
             RaidTrack.AddDebugMessage("Refresh: no known updater for tab: " .. tostring(activeTab))
         end
-
     end)
+
 end
 
 function RaidTrack:ToggleMainWindow()
@@ -214,6 +228,7 @@ if RaidTrack.RegisterSlash then
             RaidTrack.PrintSlashHelp()
             return
         end
+        -- Pozostaw otwieranie okna pod /raidtrack i /rt
         RaidTrack:ToggleMainWindow()
     end, "Open/close main window (use '/raidtrack help' for all commands)")
 else
@@ -228,16 +243,22 @@ else
             end
             return
         elseif msg:match("^cleardb%s+allplayers$") or msg:match("^cleardb%s+all$") then
-            if not RaidTrack.PlayerIsOfficer or not RaidTrack.PlayerIsOfficer() then
+            -- Przekieruj na wspólny handler global-wipe
+            if not (RaidTrack.IsOfficer and RaidTrack.IsOfficer()) then
                 print("|cffff0000RaidTrack:|r Only officers can perform a global DB wipe.")
                 return
             end
-            RaidTrack.PerformGlobalDBWipe()
+            if RaidTrack.DoGlobalWipeAllPlayers then
+                RaidTrack.DoGlobalWipeAllPlayers("slash")
+            elseif RaidTrack.GlobalWipeAllPlayers then
+                RaidTrack.GlobalWipeAllPlayers()
+            else
+                print("|cffff0000RaidTrack:|r Wipe function not found. Make sure the wipe helpers were loaded.")
+            end
             return
         end
         RaidTrack:ToggleMainWindow()
     end
-
 end
 
 -- ===== Global Wipe slash-commands =====
