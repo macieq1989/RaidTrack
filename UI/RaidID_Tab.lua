@@ -10,7 +10,8 @@ RaidTrack._raidIdUI = RaidTrack._raidIdUI or {
   scroll    = nil,
   statusLbl = nil,
   timeout   = 3,
-  raidOnly  = true, -- domyślnie filtruj do członków party/raidu
+  raidOnly  = true,      -- domyślnie filtruj do członków party/raidu
+  filterText = "",       -- tekst filtra
 }
 
 -- ==== helpers ====
@@ -20,34 +21,42 @@ local function PlayerFullName()
   return (n or "Player") .. "-" .. (r:gsub("%s+", ""))
 end
 
-local function IsFullNameInMyGroup(fullName)
-  if not fullName or fullName == "" then return false end
-  local targetName, targetRealm = fullName:match("^([^%-]+)%-?(.*)$")
-  targetRealm = targetRealm ~= "" and targetRealm or nil
+-- — normalizacja realmów i porównanie członkostwa w grupie/raidzie —
+local function _normRealm(r)
+  return tostring(r or ""):lower():gsub("[%s%p]", "") -- usuń spacje i znaki, do lower
+end
 
-  local function matchUnit(unit)
-    if not UnitExists(unit) then return false end
-    local n, r = UnitFullName(unit)
-    if not n then return false end
-    if targetRealm then
-      return (n == targetName) and (r == targetRealm)
-    else
-      return (n == targetName)
-    end
+local function _splitFull(full)
+  local n, r = tostring(full or ""):match("^([^%-]+)%-?(.*)$")
+  if r and r ~= "" then r = _normRealm(r) else r = nil end
+  return n, r
+end
+
+local function _buildGroupSet()
+  local set = {}
+  local function add(unit)
+    if not UnitExists(unit) then return end
+    local n, r = UnitFullName(unit); if not n then return end
+    set[n] = true                               -- Name
+    set[n.."-".._normRealm(r)] = true           -- Name-realm (znormalizowany)
   end
-
   if IsInRaid() then
-    for i=1, GetNumGroupMembers() do
-      if matchUnit("raid"..i) then return true end
-    end
+    for i=1, GetNumGroupMembers() do add("raid"..i) end
   elseif IsInGroup() then
-    if matchUnit("player") then return true end
-    for i=1, GetNumSubgroupMembers() do
-      if matchUnit("party"..i) then return true end
-    end
+    add("player")
+    for i=1, GetNumSubgroupMembers() do add("party"..i) end
   else
-    return matchUnit("player")
+    add("player")
   end
+  return set
+end
+
+local function IsFullNameInMyGroup(fullName)
+  local n, r = _splitFull(fullName)
+  if not n then return false end
+  local set = _buildGroupSet()
+  if set[n] then return true end                 -- match po samym „Name”
+  if r and set[n.."-"..r] then return true end  -- match po „Name-Realm”
   return false
 end
 
@@ -62,9 +71,59 @@ local function fmtReset(sec)
   return string.format("%dm", m)
 end
 
-local function flattenResults(results, raidOnly)
-  -- Zwraca posortowaną listę wierszy { player, name, diff, id, resetText }
+-- mapa moich lockoutów: key = name .. "||" .. diff  → id
+local function buildMyLockoutMap(results)
+  local map = {}
+  if not results then return map end
+
+  local myName, myRealm = UnitFullName("player")
+  local myNorm = myName.."-".._normRealm(myRealm or GetRealmName())
+
+  -- dopasuj klucz w results niezależnie od formatu
+  local candidateKeys = {}
+  for who,_ in pairs(results) do
+    local n, r = _splitFull(who)
+    if n == myName then
+      table.insert(candidateKeys, who)
+      -- preferuj idealny match po realmie
+      if r and (n.."-"..r) == myNorm then
+        candidateKeys = { who }
+        break
+      end
+    end
+  end
+  local myKey = candidateKeys[1]
+  if not myKey then return map end
+
+  local list = results[myKey] or {}
+  for _, e in ipairs(list) do
+    local name  = tostring(e.name or "?")
+    local diff  = tostring(e.diff or "?")
+    local id    = tostring(e.id or "")
+    if id ~= "" and id ~= "—" then
+      map[name.."||"..diff] = id
+    end
+  end
+  return map
+end
+
+-- test filtra tekstowego (case-insensitive)
+local function passesFilter(row, filterText)
+  filterText = tostring(filterText or ""):lower()
+  if filterText == "" then return true end
+  local function L(x) return tostring(x or ""):lower() end
+  return L(row.player):find(filterText, 1, true)
+      or L(row.name):find(filterText, 1, true)
+      or L(row.diff):find(filterText, 1, true)
+      or L(row.id):find(filterText, 1, true)
+      or L(row.reset):find(filterText, 1, true)
+end
+
+-- Zwraca posortowaną listę wierszy { player, name, diff, id, reset, differs }
+local function flattenResults(results, raidOnly, filterText)
+  local myMap = buildMyLockoutMap(results)
   local rows = {}
+
   for who, list in pairs(results or {}) do
     if (not raidOnly) or IsFullNameInMyGroup(who) then
       if list and #list > 0 then
@@ -75,22 +134,34 @@ local function flattenResults(results, raidOnly)
           return tostring(a.name) < tostring(b.name)
         end)
         for _, e in ipairs(list) do
-          table.insert(rows, {
+          local name  = e.name or "?"
+          local diff  = e.diff or "?"
+          local idStr = tostring(e.id or "?")
+          local reset = fmtReset(e.resetSec or 0)
+          local key   = tostring(name).."||"..tostring(diff)
+          local myId  = myMap[key]
+          local differs = (myId and idStr ~= myId) and (idStr ~= "—")
+          local row = {
             player = who,
-            name   = e.name or "?",
-            diff   = e.diff or "?",
-            id     = e.id or "?",
-            reset  = fmtReset(e.resetSec or 0),
-          })
+            name   = name,
+            diff   = diff,
+            id     = idStr,
+            reset  = reset,
+            differs = differs,
+          }
+          if passesFilter(row, filterText) then
+            table.insert(rows, row)
+          end
         end
       else
-        -- pokaż „puste” lockouty jako 1 wiersz
-        table.insert(rows, {
-          player = who, name = "—", diff = "—", id = "—", reset = "—"
-        })
+        local row = { player = who, name = "—", diff = "—", id = "—", reset = "—", differs = false }
+        if passesFilter(row, filterText) then
+          table.insert(rows, row)
+        end
       end
     end
   end
+
   table.sort(rows, function(a,b)
     if a.player == b.player then
       if a.name == b.name then
@@ -103,9 +174,14 @@ local function flattenResults(results, raidOnly)
   return rows
 end
 
-local function addCell(rowGroup, text, width)
+local COLOR_RED = {r=1.0, g=0.35, b=0.35}
+
+local function addCell(rowGroup, text, width, color)
   local lbl = AceGUI:Create("Label")
   lbl:SetText(text or "")
+  if color and lbl.SetColor then
+    lbl:SetColor(color.r or 1, color.g or 1, color.b or 1)
+  end
   lbl:SetWidth(width)
   rowGroup:AddChild(lbl)
 end
@@ -147,13 +223,13 @@ local function rebuildTable()
   end
 
   local results = RaidTrack.RaidID:GetResults()
-  local rows = flattenResults(results, ui.raidOnly)
+  local rows = flattenResults(results, ui.raidOnly, ui.filterText)
 
   buildHeader(ui.scroll)
 
   if #rows == 0 then
     local empty = AceGUI:Create("Label")
-    empty:SetText("|cffaaaaaaBrak danych. Użyj przycisku Scan (wszyscy w grupie muszą mieć moduł).|r")
+    empty:SetText("|cffaaaaaaBrak danych (sprawdź filtr / Raid only).|r")
     empty:SetFullWidth(true)
     ui.scroll:AddChild(empty)
     return
@@ -164,11 +240,11 @@ local function rebuildTable()
     line:SetFullWidth(true)
     line:SetLayout("Flow")
 
-    addCell(line, r.player, 180)
-    addCell(line, r.name,   260)
-    addCell(line, r.diff,    90)
-    addCell(line, r.id,     130)
-    addCell(line, r.reset,   80)
+    addCell(line, r.player, 180, nil)
+    addCell(line, r.name,   260, nil)
+    addCell(line, r.diff,    90, nil)
+    addCell(line, r.id,     130, r.differs and COLOR_RED or nil) -- kolorujemy ID różne od moich
+    addCell(line, r.reset,   80, nil)
 
     ui.scroll:AddChild(line)
   end
@@ -252,6 +328,18 @@ function RaidTrack:Render_raidIdTab(container)
     rebuildTable()
   end)
   top:AddChild(chk)
+
+  -- Filter box
+  local filterBox = AceGUI:Create("EditBox")
+  filterBox:SetLabel("Filter")
+  filterBox:SetText(RaidTrack._raidIdUI.filterText or "")
+  filterBox:SetWidth(220)
+  filterBox:DisableButton(true) -- ukryj defaultowy przycisk OK w AceGUI-EditBox
+  filterBox:SetCallback("OnTextChanged", function(_, _, val)
+    RaidTrack._raidIdUI.filterText = tostring(val or "")
+    rebuildTable()
+  end)
+  top:AddChild(filterBox)
 
   -- Status label (fills rest of width)
   local status = AceGUI:Create("Label")
